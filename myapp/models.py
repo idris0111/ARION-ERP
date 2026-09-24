@@ -571,3 +571,42 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f'{self.user} - {self.action}'
+
+
+class SaleReturn(models.Model):
+    STATUS_CHOICES = [('DRAFT','Draft'),('POSTED','Posted')]
+    number = models.CharField(max_length=50,unique=True)
+    sale = models.ForeignKey(Sale,on_delete=models.CASCADE,related_name='returns')
+    warehouse = models.ForeignKey(Warehouse,on_delete=models.CASCADE)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='DRAFT')
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return self.number
+
+class SaleReturnItem(models.Model):
+    sale_return = models.ForeignKey(SaleReturn,on_delete=models.CASCADE,related_name='items')
+    product = models.ForeignKey(Product,on_delete=models.CASCADE)
+    quantity = models.DecimalField(max_digits=12,decimal_places=2)
+    price = models.DecimalField(max_digits=12,decimal_places=2,default=0)
+    def __str__(self):
+        return str(self.product)
+
+class PurchaseReturn(models.Model):
+    STATUS_CHOICES = [('DRAFT','Draft'),('POSTED','Posted')]
+    number = models.CharField(max_length=50,unique=True)
+    purchase = models.ForeignKey(Purchase,on_delete=models.CASCADE,related_name='returns')
+    warehouse = models.ForeignKey(Warehouse,on_delete=models.CASCADE)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='DRAFT')
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return self.number
+
+class PurchaseReturnItem(models.Model):
+    purchase_return = models.ForeignKey(PurchaseReturn,on_delete=models.CASCADE,related_name='items')
+    product = models.ForeignKey(Product,on_delete=models.CASCADE)
+    quantity = models.DecimalField(max_digits=12,decimal_places=2)
+    price = models.DecimalField(max_digits=12,decimal_places=2,default=0)
+    def __str__(self):
+        return str(self.product)
