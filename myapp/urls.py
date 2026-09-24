@@ -106,4 +106,13 @@ urlpatterns = [
     path('reports/low-stock/',LowStockReportView.as_view()),
     path('reports/top-products/',TopProductsReportView.as_view()),
     path('reports/monthly-sales/',MonthlySalesReportView.as_view()),
+
+    path('sale-returns/',SaleReturnListCreateView.as_view()),
+    path('sale-returns/<int:pk>/',SaleReturnDetailView.as_view()),
+    path('sale-return-items/',SaleReturnItemListCreateView.as_view()),
+    path('sale-returns/<int:pk>/post/',PostSaleReturnView.as_view()),
+    path('purchase-returns/',PurchaseReturnListCreateView.as_view()),
+    path('purchase-returns/<int:pk>/',PurchaseReturnDetailView.as_view()),
+    path('purchase-return-items/',PurchaseReturnItemListCreateView.as_view()),
+    path('purchase-returns/<int:pk>/post/',PostPurchaseReturnView.as_view()),
 ]
