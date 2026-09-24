@@ -1,101 +1,83 @@
-from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib import admin
+from .models import (
+    Organization,
+    Branch,
+    OrganizationMember,
+    Department,
+    Position,
+    Employee,
+    SalaryPayment,
+    Counterparty,
+    ContactPerson,
+    Category,
+    Unit,
+    Brand,
+    Product,
+    PriceType,
+    ProductPrice,
+    Warehouse,
+    Stock,
+    StockMovement,
+    Purchase,
+    PurchaseItem,
+    Sale,
+    SaleItem,
+    StockTransfer,
+    StockTransferItem,
+    WriteOff,
+    WriteOffItem,
+    Inventory,
+    InventoryItem,
+    CashAccount,
+    FinanceCategory,
+    CashTransaction,
+    MoneyTransfer,
+    Debt,
+    AuditLog,
+)
 
 
-class User(AbstractUser):
-    ROLE_CHOICES = [
-        ('SUPER_ADMIN', 'Super Admin'),
-        ('ADMIN', 'Admin'),
-        ('DIRECTOR', 'Director'),
-        ('CHIEF_ACCOUNTANT', 'Chief Accountant'),
-        ('ACCOUNTANT', 'Accountant'),
-        ('MANAGER', 'Manager'),
-        ('SALES_MANAGER', 'Sales Manager'),
-        ('PURCHASE_MANAGER', 'Purchase Manager'),
-        ('WAREHOUSE_MANAGER', 'Warehouse Manager'),
-        ('STOREKEEPER', 'Storekeeper'),
-        ('CASHIER', 'Cashier'),
-        ('HR', 'HR'),
-        ('AUDITOR', 'Auditor'),
-        ('ANALYST', 'Analyst'),
-        ('OPERATOR', 'Operator'),
-        ('EMPLOYEE', 'Employee'),
-        ('VIEWER', 'Viewer'),
-    ]
+admin.site.register(Organization)
+admin.site.register(Branch)
+admin.site.register(OrganizationMember)
+admin.site.register(Department)
+admin.site.register(Position)
+admin.site.register(Employee)
+admin.site.register(SalaryPayment)
 
-    role = models.CharField(
-        max_length=30,
-        choices=ROLE_CHOICES,
-        default='EMPLOYEE'
-    )
+admin.site.register(Counterparty)
+admin.site.register(ContactPerson)
 
-    phone = models.CharField(
-        max_length=20,
-        unique=True,
-        null=True,
-        blank=True
-    )
+admin.site.register(Category)
+admin.site.register(Unit)
+admin.site.register(Brand)
+admin.site.register(Product)
+admin.site.register(PriceType)
+admin.site.register(ProductPrice)
 
-    avatar = models.ImageField(
-        upload_to='',
-        null=True,
-        blank=True
-    )
+admin.site.register(Warehouse)
+admin.site.register(Stock)
+admin.site.register(StockMovement)
 
-    is_verified = models.BooleanField(default=False)
+admin.site.register(Purchase)
+admin.site.register(PurchaseItem)
 
-    created_at = models.DateTimeField(auto_now_add=True)
+admin.site.register(Sale)
+admin.site.register(SaleItem)
 
-    updated_at = models.DateTimeField(auto_now=True)
+admin.site.register(StockTransfer)
+admin.site.register(StockTransferItem)
 
-    def __str__(self):
-        return self.username
+admin.site.register(WriteOff)
+admin.site.register(WriteOffItem)
 
+admin.site.register(Inventory)
+admin.site.register(InventoryItem)
 
-class Profile(models.Model):
-    user = models.OneToOneField(
-        User,
-        on_delete=models.CASCADE,
-        related_name='profile'
-    )
+admin.site.register(CashAccount)
+admin.site.register(FinanceCategory)
+admin.site.register(CashTransaction)
+admin.site.register(MoneyTransfer)
 
-    middle_name = models.CharField(
-        max_length=150,
-        blank=True
-    )
-
-    address = models.CharField(
-        max_length=255,
-        blank=True
-    )
-
-    birth_date = models.DateField(
-        null=True,
-        blank=True
-    )
-
-    passport = models.CharField(
-        max_length=100,
-        blank=True
-    )
-
-    position = models.CharField(
-        max_length=150,
-        blank=True
-    )
-
-    hire_date = models.DateField(
-        null=True,
-        blank=True
-    )
-
-    salary = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0
-    )
-
-    is_employee = models.BooleanField(default=True)
-
-    def __str__(self):
-        return self.user.username
+admin.site.register(Debt)
+admin.site.register(AuditLog)
