@@ -120,7 +120,8 @@ class EmployeeListCreateView(ListCreateAPIView):
     queryset = Employee.objects.all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsHRWorker]
-
+    filterset_fields = ['organization', 'branch', 'department', 'position', 'is_active']
+    search_fields = ['user__username', 'user__first_name', 'user__last_name']
 
 class EmployeeDetailView(RetrieveUpdateDestroyAPIView):
     queryset = Employee.objects.all()
@@ -259,11 +260,13 @@ class WarehouseDetailView(RetrieveUpdateDestroyAPIView):
     serializer_class = WarehouseSerializer
     permission_classes = [IsWarehouseWorker]
 
-
 class StockListView(ListAPIView):
     queryset = Stock.objects.all()
     serializer_class = StockSerializer
     permission_classes = [IsAuthenticated]
+    filterset_fields = ['warehouse', 'product']
+    search_fields = ['product__name', 'product__sku', 'product__barcode']
+    ordering_fields = ['quantity', 'average_cost']
 
 
 class StockDetailView(RetrieveAPIView):
@@ -281,12 +284,13 @@ class StockMovementListView(ListAPIView):
 # =========================================================
 # PURCHASE
 # =========================================================
-
 class PurchaseListCreateView(ListCreateAPIView):
     queryset = Purchase.objects.all().order_by('-created_at')
     serializer_class = PurchaseSerializer
     permission_classes = [IsPurchaseWorker]
-
+    filterset_fields = ['organization', 'warehouse', 'supplier', 'status', 'payment_status']
+    search_fields = ['number']
+    ordering_fields = ['created_at', 'total_amount']
 
 class PurchaseDetailView(RetrieveUpdateDestroyAPIView):
     queryset = Purchase.objects.all()
@@ -466,7 +470,9 @@ class SaleListCreateView(ListCreateAPIView):
     queryset = Sale.objects.all().order_by('-created_at')
     serializer_class = SaleSerializer
     permission_classes = [IsSalesWorker]
-
+    filterset_fields = ['organization', 'warehouse', 'customer', 'status', 'payment_status']
+    search_fields = ['number']
+    ordering_fields = ['created_at', 'total_amount']
 
 class SaleDetailView(RetrieveUpdateDestroyAPIView):
     queryset = Sale.objects.all()
