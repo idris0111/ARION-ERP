@@ -1,39 +1,7 @@
 from rest_framework import serializers
-from .models import (
-    Organization,
-    Branch,
-    OrganizationMember,
-    Department,
-    Position,
-    Employee,
-    SalaryPayment,
-    Counterparty,
-    ContactPerson,
-    Category,
-    Unit,
-    Brand,
-    Product,
-    PriceType,
-    ProductPrice,
-    Warehouse,
-    Stock,
-    StockMovement,
-    Purchase,
-    PurchaseItem,
-    Sale,
-    SaleItem,
-    StockTransfer,
-    StockTransferItem,
-    WriteOff,
-    WriteOffItem,
-    Inventory,
-    InventoryItem,
-    CashAccount,
-    FinanceCategory,
-    CashTransaction,
-    MoneyTransfer,
-    Debt,
-    AuditLog,
+from .models import (Organization, SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,
+    Counterparty,ContactPerson,Category,Unit,Brand,Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,
+    SaleItem,StockTransfer,StockTransferItem,WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,
 )
 
 
@@ -238,4 +206,24 @@ class DebtSerializer(serializers.ModelSerializer):
 class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog
+        fields = '__all__'
+
+class SaleReturnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaleReturn
+        fields = '__all__'
+
+class SaleReturnItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SaleReturnItem
+        fields = '__all__'
+
+class PurchaseReturnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseReturn
+        fields = '__all__'
+
+class PurchaseReturnItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseReturnItem
         fields = '__all__'

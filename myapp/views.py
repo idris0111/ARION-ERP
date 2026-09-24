@@ -8,12 +8,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
-from .models import (Organization,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,Counterparty,ContactPerson,Category,Unit,Brand,
+from .models import (SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Organization,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,Counterparty,ContactPerson,Category,Unit,Brand,
     Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,SaleItem,StockTransfer,StockTransferItem,
     WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,
 )
-
 from .serializers import (
+    SaleReturnSerializer,SaleReturnItemSerializer,PurchaseReturnSerializer,PurchaseReturnItemSerializer,
     OrganizationSerializer,BranchSerializer,OrganizationMemberSerializer,DepartmentSerializer,PositionSerializer,EmployeeSerializer,SalaryPaymentSerializer,
     CounterpartySerializer,ContactPersonSerializer,CategorySerializer,UnitSerializer,BrandSerializer,ProductSerializer,PriceTypeSerializer,ProductPriceSerializer,WarehouseSerializer,
     StockSerializer,StockMovementSerializer,PurchaseSerializer,PurchaseItemSerializer,SaleSerializer,SaleItemSerializer,StockTransferSerializer,StockTransferItemSerializer,
@@ -1469,3 +1469,100 @@ class AuditLogDetailView(RetrieveAPIView):
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
     permission_classes = [IsAuditor]
+
+
+"*******************************************"
+
+class SaleReturnListCreateView(ListCreateAPIView):
+    queryset = SaleReturn.objects.all().order_by('-created_at')
+    serializer_class = SaleReturnSerializer
+    permission_classes = [IsSalesWorker]
+
+class SaleReturnDetailView(RetrieveUpdateDestroyAPIView):
+    queryset = SaleReturn.objects.all()
+    serializer_class = SaleReturnSerializer
+    permission_classes = [IsSalesWorker]
+
+class SaleReturnItemListCreateView(ListCreateAPIView):
+    queryset = SaleReturnItem.objects.all()
+    serializer_class = SaleReturnItemSerializer
+    permission_classes = [IsSalesWorker]
+
+class PurchaseReturnListCreateView(ListCreateAPIView):
+    queryset = PurchaseReturn.objects.all().order_by('-created_at')
+    serializer_class = PurchaseReturnSerializer
+    permission_classes = [IsPurchaseWorker]
+
+class PurchaseReturnDetailView(RetrieveUpdateDestroyAPIView):
+    queryset = PurchaseReturn.objects.all()
+    serializer_class = PurchaseReturnSerializer
+    permission_classes = [IsPurchaseWorker]
+
+class PurchaseReturnItemListCreateView(ListCreateAPIView):
+    queryset = PurchaseReturnItem.objects.all()
+    serializer_class = PurchaseReturnItemSerializer
+    permission_classes = [IsPurchaseWorker]
+
+
+class PostSaleReturnView(APIView):
+    permission_classes = [IsSalesWorker]
+    def post(self,request,pk):
+        sale_return = get_object_or_404(SaleReturn,pk=pk)
+        if sale_return.status == 'POSTED':
+            return Response({'error':'Возврат уже проведён'},status=400)
+        items = SaleReturnItem.objects.filter(sale_return=sale_return)
+        if not items.exists():
+            return Response({'error':'Нет товаров'},status=400)
+        with transaction.atomic():
+            for item in items:
+                stock,created = Stock.objects.get_or_create(warehouse=sale_return.warehouse,product=item.product,defaults={'quantity':0,'average_cost':0})
+                stock.quantity += item.quantity
+                stock.save()
+                StockMovement.objects.create(warehouse=sale_return.warehouse,product=item.product,movement_type='RETURN_IN',quantity=item.quantity,unit_cost=stock.average_cost,document_type='SALE_RETURN',document_id=sale_return.id,comment=f'Возврат продажи {sale_return.number}')
+            sale_return.status = 'POSTED'
+            sale_return.save()
+        return Response({'message':'Возврат продажи проведён'})
+
+
+class PostSaleReturnView(APIView):
+    permission_classes = [IsSalesWorker]
+    def post(self,request,pk):
+        sale_return = get_object_or_404(SaleReturn,pk=pk)
+        if sale_return.status == 'POSTED':
+            return Response({'error':'Возврат уже проведён'},status=400)
+        items = SaleReturnItem.objects.filter(sale_return=sale_return)
+        if not items.exists():
+            return Response({'error':'Нет товаров'},status=400)
+        with transaction.atomic():
+            for item in items:
+                stock,created = Stock.objects.get_or_create(warehouse=sale_return.warehouse,product=item.product,defaults={'quantity':0,'average_cost':0})
+                stock.quantity += item.quantity
+                stock.save()
+                StockMovement.objects.create(warehouse=sale_return.warehouse,product=item.product,movement_type='RETURN_IN',quantity=item.quantity,unit_cost=stock.average_cost,document_type='SALE_RETURN',document_id=sale_return.id,comment=f'Возврат продажи {sale_return.number}')
+            sale_return.status = 'POSTED'
+            sale_return.save()
+        return Response({'message':'Возврат продажи проведён'})
+
+class PostPurchaseReturnView(APIView):
+    permission_classes = [IsPurchaseWorker]
+    def post(self,request,pk):
+        purchase_return = get_object_or_404(PurchaseReturn,pk=pk)
+        if purchase_return.status == 'POSTED':
+            return Response({'error':'Возврат уже проведён'},status=400)
+        items = PurchaseReturnItem.objects.filter(purchase_return=purchase_return)
+        if not items.exists():
+            return Response({'error':'Нет товаров'},status=400)
+        with transaction.atomic():
+            prepared = []
+            for item in items:
+                stock = Stock.objects.select_for_update().filter(warehouse=purchase_return.warehouse,product=item.product).first()
+                if not stock or stock.quantity < item.quantity:
+                    return Response({'error':f'Недостаточно товара {item.product}'},status=400)
+                prepared.append((item,stock))
+            for item,stock in prepared:
+                stock.quantity -= item.quantity
+                stock.save()
+                StockMovement.objects.create(warehouse=purchase_return.warehouse,product=item.product,movement_type='RETURN_OUT',quantity=item.quantity,unit_cost=stock.average_cost,document_type='PURCHASE_RETURN',document_id=purchase_return.id,comment=f'Возврат поставщику {purchase_return.number}')
+            purchase_return.status = 'POSTED'
+            purchase_return.save()
+        return Response({'message':'Возврат поставщику проведён'})
