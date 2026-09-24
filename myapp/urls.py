@@ -1,3 +1,98 @@
 from django.urls import path
+from .views import *
 
-urlpatterns = []
+urlpatterns = [
+    path('organizations/', OrganizationListCreateView.as_view()),
+    path('organizations/<int:pk>/', OrganizationDetailView.as_view()),
+    path('branches/', BranchListCreateView.as_view()),
+    path('branches/<int:pk>/', BranchDetailView.as_view()),
+    path('organization-members/', OrganizationMemberListCreateView.as_view()),
+    path('organization-members/<int:pk>/', OrganizationMemberDetailView.as_view()),
+
+    path('departments/', DepartmentListCreateView.as_view()),
+    path('departments/<int:pk>/', DepartmentDetailView.as_view()),
+    path('positions/', PositionListCreateView.as_view()),
+    path('positions/<int:pk>/', PositionDetailView.as_view()),
+    path('employees/', EmployeeListCreateView.as_view()),
+    path('employees/<int:pk>/', EmployeeDetailView.as_view()),
+    path('salary-payments/', SalaryPaymentListCreateView.as_view()),
+    path('salary-payments/<int:pk>/', SalaryPaymentDetailView.as_view()),
+
+    path('counterparties/', CounterpartyListCreateView.as_view()),
+    path('counterparties/<int:pk>/', CounterpartyDetailView.as_view()),
+    path('contact-persons/', ContactPersonListCreateView.as_view()),
+    path('contact-persons/<int:pk>/', ContactPersonDetailView.as_view()),
+
+    path('categories/', CategoryListCreateView.as_view()),
+    path('categories/<int:pk>/', CategoryDetailView.as_view()),
+    path('units/', UnitListCreateView.as_view()),
+    path('units/<int:pk>/', UnitDetailView.as_view()),
+    path('brands/', BrandListCreateView.as_view()),
+    path('brands/<int:pk>/', BrandDetailView.as_view()),
+    path('products/', ProductListCreateView.as_view()),
+    path('products/<int:pk>/', ProductDetailView.as_view()),
+    path('price-types/', PriceTypeListCreateView.as_view()),
+    path('price-types/<int:pk>/', PriceTypeDetailView.as_view()),
+    path('product-prices/', ProductPriceListCreateView.as_view()),
+    path('product-prices/<int:pk>/', ProductPriceDetailView.as_view()),
+
+    path('warehouses/', WarehouseListCreateView.as_view()),
+    path('warehouses/<int:pk>/', WarehouseDetailView.as_view()),
+    path('stocks/', StockListView.as_view()),
+    path('stocks/<int:pk>/', StockDetailView.as_view()),
+    path('stock-movements/', StockMovementListView.as_view()),
+
+    path('purchases/', PurchaseListCreateView.as_view()),
+    path('purchases/<int:pk>/', PurchaseDetailView.as_view()),
+    path('purchase-items/', PurchaseItemListCreateView.as_view()),
+    path('purchase-items/<int:pk>/', PurchaseItemDetailView.as_view()),
+    path('purchases/<int:pk>/post/', PostPurchaseView.as_view()),
+    path('purchases/<int:pk>/unpost/', UnpostPurchaseView.as_view()),
+
+    path('sales/', SaleListCreateView.as_view()),
+    path('sales/<int:pk>/', SaleDetailView.as_view()),
+    path('sale-items/', SaleItemListCreateView.as_view()),
+    path('sale-items/<int:pk>/', SaleItemDetailView.as_view()),
+    path('sales/<int:pk>/post/', PostSaleView.as_view()),
+    path('sales/<int:pk>/unpost/', UnpostSaleView.as_view()),
+
+    path('stock-transfers/', StockTransferListCreateView.as_view()),
+    path('stock-transfers/<int:pk>/', StockTransferDetailView.as_view()),
+    path('stock-transfer-items/', StockTransferItemListCreateView.as_view()),
+    path('stock-transfer-items/<int:pk>/', StockTransferItemDetailView.as_view()),
+    path('stock-transfers/<int:pk>/post/', PostStockTransferView.as_view()),
+    path('stock-transfers/<int:pk>/unpost/', UnpostStockTransferView.as_view()),
+
+    path('write-offs/', WriteOffListCreateView.as_view()),
+    path('write-offs/<int:pk>/', WriteOffDetailView.as_view()),
+    path('write-off-items/', WriteOffItemListCreateView.as_view()),
+    path('write-off-items/<int:pk>/', WriteOffItemDetailView.as_view()),
+    path('write-offs/<int:pk>/post/', PostWriteOffView.as_view()),
+    path('write-offs/<int:pk>/unpost/', UnpostWriteOffView.as_view()),
+
+    path('inventories/', InventoryListCreateView.as_view()),
+    path('inventories/<int:pk>/', InventoryDetailView.as_view()),
+    path('inventory-items/', InventoryItemListCreateView.as_view()),
+    path('inventory-items/<int:pk>/', InventoryItemDetailView.as_view()),
+    path('inventories/<int:pk>/post/', PostInventoryView.as_view()),
+    path('inventories/<int:pk>/unpost/', UnpostInventoryView.as_view()),
+
+    path('cash-accounts/', CashAccountListCreateView.as_view()),
+    path('cash-accounts/<int:pk>/', CashAccountDetailView.as_view()),
+    path('finance-categories/', FinanceCategoryListCreateView.as_view()),
+    path('finance-categories/<int:pk>/', FinanceCategoryDetailView.as_view()),
+    path('cash-transactions/', CashTransactionListCreateView.as_view()),
+    path('cash-transactions/<int:pk>/', CashTransactionDetailView.as_view()),
+    path('cash-transactions/<int:pk>/post/', PostCashTransactionView.as_view()),
+    path('cash-transactions/<int:pk>/unpost/', UnpostCashTransactionView.as_view()),
+
+    path('money-transfers/', MoneyTransferListCreateView.as_view()),
+    path('money-transfers/<int:pk>/', MoneyTransferDetailView.as_view()),
+
+    path('debts/', DebtListCreateView.as_view()),
+    path('debts/<int:pk>/', DebtDetailView.as_view()),
+    path('debts/<int:pk>/pay/', PayDebtView.as_view()),
+
+    path('audit-logs/', AuditLogListView.as_view()),
+    path('audit-logs/<int:pk>/', AuditLogDetailView.as_view()),
+]
