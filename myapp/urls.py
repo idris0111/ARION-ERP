@@ -1,5 +1,6 @@
 from django.urls import path
 from .views import *
+from .reports import *
 
 urlpatterns = [
     path('organizations/', OrganizationListCreateView.as_view()),
@@ -95,4 +96,14 @@ urlpatterns = [
 
     path('audit-logs/', AuditLogListView.as_view()),
     path('audit-logs/<int:pk>/', AuditLogDetailView.as_view()),
+
+    path('dashboard/',DashboardView.as_view()),
+    path('reports/sales/',SalesReportView.as_view()),
+    path('reports/purchases/',PurchaseReportView.as_view()),
+    path('reports/finance/',FinanceReportView.as_view()),
+    path('reports/debts/',DebtReportView.as_view()),
+    path('reports/stocks/',StockReportView.as_view()),
+    path('reports/low-stock/',LowStockReportView.as_view()),
+    path('reports/top-products/',TopProductsReportView.as_view()),
+    path('reports/monthly-sales/',MonthlySalesReportView.as_view()),
 ]
