@@ -115,4 +115,8 @@ urlpatterns = [
     path('purchase-returns/<int:pk>/',PurchaseReturnDetailView.as_view()),
     path('purchase-return-items/',PurchaseReturnItemListCreateView.as_view()),
     path('purchase-returns/<int:pk>/post/',PostPurchaseReturnView.as_view()),
+    path('reports/profit/',ProfitReportView.as_view()),
+    path('reports/product-profit/',ProductProfitReportView.as_view()),
+    path('reports/daily-profit/',DailyProfitReportView.as_view()),
+    path('reports/monthly-profit/',MonthlyProfitReportView.as_view()),
 ]
