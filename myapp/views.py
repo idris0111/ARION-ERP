@@ -1471,8 +1471,6 @@ class AuditLogDetailView(RetrieveAPIView):
     permission_classes = [IsAuditor]
 
 
-"*******************************************"
-
 class SaleReturnListCreateView(ListCreateAPIView):
     queryset = SaleReturn.objects.all().order_by('-created_at')
     serializer_class = SaleReturnSerializer
@@ -1523,25 +1521,6 @@ class PostSaleReturnView(APIView):
             sale_return.save()
         return Response({'message':'Возврат продажи проведён'})
 
-
-class PostSaleReturnView(APIView):
-    permission_classes = [IsSalesWorker]
-    def post(self,request,pk):
-        sale_return = get_object_or_404(SaleReturn,pk=pk)
-        if sale_return.status == 'POSTED':
-            return Response({'error':'Возврат уже проведён'},status=400)
-        items = SaleReturnItem.objects.filter(sale_return=sale_return)
-        if not items.exists():
-            return Response({'error':'Нет товаров'},status=400)
-        with transaction.atomic():
-            for item in items:
-                stock,created = Stock.objects.get_or_create(warehouse=sale_return.warehouse,product=item.product,defaults={'quantity':0,'average_cost':0})
-                stock.quantity += item.quantity
-                stock.save()
-                StockMovement.objects.create(warehouse=sale_return.warehouse,product=item.product,movement_type='RETURN_IN',quantity=item.quantity,unit_cost=stock.average_cost,document_type='SALE_RETURN',document_id=sale_return.id,comment=f'Возврат продажи {sale_return.number}')
-            sale_return.status = 'POSTED'
-            sale_return.save()
-        return Response({'message':'Возврат продажи проведён'})
 
 class PostPurchaseReturnView(APIView):
     permission_classes = [IsPurchaseWorker]

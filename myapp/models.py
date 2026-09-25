@@ -280,6 +280,7 @@ class Purchase(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='purchases')
     supplier = models.ForeignKey(Counterparty, on_delete=models.PROTECT, related_name='purchases')
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name='purchases')
+    cash_account = models.ForeignKey('CashAccount', on_delete=models.PROTECT, null=True, blank=True)
     number = models.CharField(max_length=100, unique=True)
     date = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
@@ -322,6 +323,7 @@ class Sale(models.Model):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='sales')
     customer = models.ForeignKey(Counterparty, on_delete=models.PROTECT, related_name='sales')
     warehouse = models.ForeignKey(Warehouse, on_delete=models.PROTECT, related_name='sales')
+    cash_account = models.ForeignKey('CashAccount', on_delete=models.PROTECT, null=True, blank=True)
     number = models.CharField(max_length=100, unique=True)
     date = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='DRAFT')
@@ -498,6 +500,8 @@ class CashTransaction(models.Model):
     account = models.ForeignKey(CashAccount, on_delete=models.PROTECT, related_name='transactions')
     category = models.ForeignKey(FinanceCategory, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
     counterparty = models.ForeignKey(Counterparty, on_delete=models.SET_NULL, null=True, blank=True, related_name='cash_transactions')
+    sale = models.ForeignKey(Sale, on_delete=models.SET_NULL, null=True, blank=True)
+    purchase = models.ForeignKey(Purchase, on_delete=models.SET_NULL, null=True, blank=True)
     transaction_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
     number = models.CharField(max_length=100, unique=True)
     amount = models.DecimalField(max_digits=16, decimal_places=2)
@@ -526,9 +530,9 @@ class MoneyTransfer(models.Model):
 
 
 class Debt(models.Model):
-    TYPE_CHOICES = [
-        ('RECEIVABLE', 'Нам должны'),
-        ('PAYABLE', 'Мы должны'),
+    DEBT_TYPES = [
+        ('CUSTOMER', 'Customer'),
+        ('SUPPLIER', 'Supplier'),
     ]
 
     STATUS_CHOICES = [
@@ -539,7 +543,9 @@ class Debt(models.Model):
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='debts')
     counterparty = models.ForeignKey(Counterparty, on_delete=models.PROTECT, related_name='debts')
-    debt_type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    debt_type = models.CharField(max_length=20, choices=DEBT_TYPES)
+    sale = models.ForeignKey(Sale, on_delete=models.SET_NULL, null=True, blank=True)
+    purchase = models.ForeignKey(Purchase, on_delete=models.SET_NULL, null=True, blank=True)
     amount = models.DecimalField(max_digits=16, decimal_places=2)
     paid_amount = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     due_date = models.DateField(null=True, blank=True)

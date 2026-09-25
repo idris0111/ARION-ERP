@@ -3,7 +3,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Product,Stock,Sale,SaleItem,Purchase,CashTransaction,Debt,Employee
+from .models import Product,Stock,StockMovement,Sale,SaleItem,Purchase,CashTransaction,Debt,Employee
 from .permissions import IsAccountant
 from django.db.models import Sum,F,DecimalField,ExpressionWrapper
 
