@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.views import APIView
@@ -15,11 +17,10 @@ class ProfitReportView(APIView):
         sales = Sale.objects.filter(status='POSTED')
         movements = StockMovement.objects.filter(document_type='SALE',movement_type='OUT')
         if date_from:
-            sales = sales.filter(created_at__date__gte=date_from)
-            movements = movements.filter(created_at__date__gte=date_from)
+            sales = sales.filter(date__date__gte=date_from)
         if date_to:
-            sales = sales.filter(created_at__date__lte=date_to)
-            movements = movements.filter(created_at__date__lte=date_to)
+            sales = sales.filter(date__date__lte=date_to)
+        movements = movements.filter(document_id__in=sales.values('id'))
         revenue = sales.aggregate(total=Sum('total_amount'))['total'] or 0
         cost_expression = ExpressionWrapper(F('quantity')*F('unit_cost'),output_field=DecimalField(max_digits=20,decimal_places=2))
         cost = movements.aggregate(total=Sum(cost_expression))['total'] or 0
@@ -50,8 +51,8 @@ class DailyProfitReportView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         today = timezone.now().date()
-        sales = Sale.objects.filter(status='POSTED',created_at__date=today)
-        movements = StockMovement.objects.filter(document_type='SALE',movement_type='OUT',created_at__date=today)
+        sales = Sale.objects.filter(status='POSTED',date__date=today)
+        movements = StockMovement.objects.filter(document_type='SALE',movement_type='OUT',document_id__in=sales.values('id'))
         revenue = sales.aggregate(total=Sum('total_amount'))['total'] or 0
         cost = 0
         for movement in movements:
@@ -64,8 +65,8 @@ class MonthlyProfitReportView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         now = timezone.now()
-        sales = Sale.objects.filter(status='POSTED',created_at__year=now.year,created_at__month=now.month)
-        movements = StockMovement.objects.filter(document_type='SALE',movement_type='OUT',created_at__year=now.year,created_at__month=now.month)
+        sales = Sale.objects.filter(status='POSTED',date__year=now.year,date__month=now.month)
+        movements = StockMovement.objects.filter(document_type='SALE',movement_type='OUT',document_id__in=sales.values('id'))
         revenue = sales.aggregate(total=Sum('total_amount'))['total'] or 0
         cost = 0
         for movement in movements:
@@ -77,8 +78,8 @@ class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         today = timezone.now().date()
-        sales = Sale.objects.filter(status='POSTED',created_at__date=today)
-        purchases = Purchase.objects.filter(status='POSTED',created_at__date=today)
+        sales = Sale.objects.filter(status='POSTED',date__date=today)
+        purchases = Purchase.objects.filter(status='POSTED',date__date=today)
         return Response({
             'products':Product.objects.count(),
             'employees':Employee.objects.count(),
@@ -96,9 +97,9 @@ class SalesReportView(APIView):
         date_from = request.GET.get('date_from')
         date_to = request.GET.get('date_to')
         if date_from:
-            sales = sales.filter(created_at__date__gte=date_from)
+            sales = sales.filter(date__date__gte=date_from)
         if date_to:
-            sales = sales.filter(created_at__date__lte=date_to)
+            sales = sales.filter(date__date__lte=date_to)
         return Response({
             'sales_count':sales.count(),
             'total_sales':sales.aggregate(total=Sum('total_amount'))['total'] or 0,
@@ -111,9 +112,9 @@ class PurchaseReportView(APIView):
         date_from = request.GET.get('date_from')
         date_to = request.GET.get('date_to')
         if date_from:
-            purchases = purchases.filter(created_at__date__gte=date_from)
+            purchases = purchases.filter(date__date__gte=date_from)
         if date_to:
-            purchases = purchases.filter(created_at__date__lte=date_to)
+            purchases = purchases.filter(date__date__lte=date_to)
         return Response({
             'purchases_count':purchases.count(),
             'total_purchases':purchases.aggregate(total=Sum('total_amount'))['total'] or 0,
@@ -150,11 +151,15 @@ class StockReportView(APIView):
 class LowStockReportView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        try:
-            limit = int(request.GET.get('limit',5))
-        except:
-            limit = 5
-        stocks = Stock.objects.filter(quantity__lte=limit).select_related('product','warehouse')
+        limit = request.GET.get('limit')
+        stocks = Stock.objects.select_related('product','warehouse')
+        if limit is None:
+            stocks = stocks.filter(quantity__lte=F('product__min_stock'))
+        else:
+            try:
+                stocks = stocks.filter(quantity__lte=Decimal(str(limit)))
+            except (ArithmeticError, ValueError):
+                return Response({'error':'Неверный limit'},status=400)
         data = []
         for stock in stocks:
             data.append({'product':str(stock.product),'warehouse':str(stock.warehouse),'quantity':stock.quantity})
@@ -170,6 +175,6 @@ class MonthlySalesReportView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         now = timezone.now()
-        sales = Sale.objects.filter(status='POSTED',created_at__year=now.year,created_at__month=now.month)
+        sales = Sale.objects.filter(status='POSTED',date__year=now.year,date__month=now.month)
         total = sales.aggregate(total=Sum('total_amount'))['total'] or 0
         return Response({'year':now.year,'month':now.month,'sales_count':sales.count(),'total_sales':total})

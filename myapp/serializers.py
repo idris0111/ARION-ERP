@@ -45,6 +45,12 @@ class SalaryPaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = SalaryPayment
         fields = '__all__'
+        read_only_fields = ['status', 'paid_at']
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Сумма должна быть больше 0')
+        return value
 
 
 class CounterpartySerializer(serializers.ModelSerializer):
@@ -117,6 +123,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Purchase
         fields = '__all__'
+        read_only_fields = ['status', 'payment_status', 'total_amount']
 
     def validate_paid_amount(self, value):
         if value < 0:
@@ -128,6 +135,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = '__all__'
+        read_only_fields = ['total']
 
     def validate_quantity(self, value):
         if value <= 0:
@@ -152,6 +160,7 @@ class SaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sale
         fields = '__all__'
+        read_only_fields = ['status', 'payment_status', 'total_amount']
 
     def validate_paid_amount(self, value):
         if value < 0:
@@ -163,6 +172,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleItem
         fields = '__all__'
+        read_only_fields = ['total']
 
     def validate_quantity(self, value):
         if value <= 0:
@@ -187,6 +197,7 @@ class StockTransferSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransfer
         fields = '__all__'
+        read_only_fields = ['status']
 
     def validate(self, data):
         from_warehouse = data.get('from_warehouse')
@@ -222,12 +233,14 @@ class WriteOffSerializer(serializers.ModelSerializer):
     class Meta:
         model = WriteOff
         fields = '__all__'
+        read_only_fields = ['status']
 
 
 class WriteOffItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = WriteOffItem
         fields = '__all__'
+        read_only_fields = ['cost']
 
     def validate_quantity(self, value):
         if value <= 0:
@@ -247,18 +260,40 @@ class InventorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Inventory
         fields = '__all__'
+        read_only_fields = ['status']
 
 
 class InventoryItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = InventoryItem
         fields = '__all__'
+        read_only_fields = ['system_quantity', 'difference']
+
+    def validate_actual_quantity(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Фактический остаток не может быть отрицательным')
+        return value
+
+    def validate(self, data):
+        inventory = data.get('inventory')
+        if inventory is None and self.instance is not None:
+            inventory = self.instance.inventory
+        if inventory and inventory.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённую инвентаризацию')
+        return data
 
 
 class CashAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashAccount
         fields = '__all__'
+
+    def validate_balance(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Баланс не может быть отрицательным')
+        if self.instance is not None and value != self.instance.balance:
+            raise serializers.ValidationError('Баланс изменяется только денежными операциями')
+        return value
 
 
 class FinanceCategorySerializer(serializers.ModelSerializer):
@@ -271,6 +306,12 @@ class CashTransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashTransaction
         fields = '__all__'
+        read_only_fields = ['status', 'sale', 'purchase']
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Сумма должна быть больше 0')
+        return value
 
 
 class MoneyTransferSerializer(serializers.ModelSerializer):
@@ -278,11 +319,33 @@ class MoneyTransferSerializer(serializers.ModelSerializer):
         model = MoneyTransfer
         fields = '__all__'
 
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Сумма должна быть больше 0')
+        return value
+
+    def validate(self, data):
+        if data.get('from_account') == data.get('to_account'):
+            raise serializers.ValidationError('Нельзя переводить деньги на тот же счёт')
+        organization = data.get('organization')
+        from_account = data.get('from_account')
+        to_account = data.get('to_account')
+        if organization and from_account and from_account.organization_id != organization.id:
+            raise serializers.ValidationError('Счёт отправителя относится к другой организации')
+        if organization and to_account and to_account.organization_id != organization.id:
+            raise serializers.ValidationError('Счёт получателя относится к другой организации')
+        return data
+
 
 class DebtSerializer(serializers.ModelSerializer):
     class Meta:
         model = Debt
         fields = '__all__'
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Сумма должна быть больше 0')
+        return value
 
 
 class AuditLogSerializer(serializers.ModelSerializer):
@@ -302,6 +365,7 @@ class SaleReturnSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleReturn
         fields = '__all__'
+        read_only_fields = ['status']
 
 class SaleReturnItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -318,10 +382,19 @@ class SaleReturnItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Цена не может быть отрицательной')
         return value
 
+    def validate(self, data):
+        sale_return = data.get('sale_return')
+        if sale_return is None and self.instance is not None:
+            sale_return = self.instance.sale_return
+        if sale_return and sale_return.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённый возврат')
+        return data
+
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseReturn
         fields = '__all__'
+        read_only_fields = ['status']
 
 class PurchaseReturnItemSerializer(serializers.ModelSerializer):
     class Meta:
@@ -337,3 +410,12 @@ class PurchaseReturnItemSerializer(serializers.ModelSerializer):
         if value < 0:
             raise serializers.ValidationError('Цена не может быть отрицательной')
         return value
+
+
+    def validate(self, data):
+        purchase_return = data.get('purchase_return')
+        if purchase_return is None and self.instance is not None:
+            purchase_return = self.instance.purchase_return
+        if purchase_return and purchase_return.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённый возврат')
+        return data

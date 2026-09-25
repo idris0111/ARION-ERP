@@ -2,6 +2,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.db import transaction
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -55,9 +56,11 @@ def notify_roles(roles, title, message, notification_type='INFO'):
 
 
 class PostedDocumentProtectMixin:
+    protected_statuses = ('POSTED',)
+
     def update(self, request, *args, **kwargs):
         obj = self.get_object()
-        if obj.status == 'POSTED':
+        if obj.status in self.protected_statuses:
             return Response(
                 {'error': 'Нельзя изменять проведённый документ'},
                 status=400,
@@ -66,11 +69,28 @@ class PostedDocumentProtectMixin:
 
     def destroy(self, request, *args, **kwargs):
         obj = self.get_object()
-        if obj.status == 'POSTED':
+        if obj.status in self.protected_statuses:
             return Response(
                 {'error': 'Нельзя удалить проведённый документ'},
                 status=400,
             )
+        return super().destroy(request, *args, **kwargs)
+
+
+class PostedItemProtectMixin:
+    document_field = None
+
+    def _is_posted(self, obj):
+        return getattr(obj, self.document_field).status == 'POSTED'
+
+    def update(self, request, *args, **kwargs):
+        if self._is_posted(self.get_object()):
+            return Response({'error': 'Нельзя менять позицию проведённого документа'}, status=400)
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if self._is_posted(self.get_object()):
+            return Response({'error': 'Нельзя удалить позицию проведённого документа'}, status=400)
         return super().destroy(request, *args, **kwargs)
 
 
@@ -85,6 +105,8 @@ def calculate_payment_status(total_amount, paid_amount):
 
 
 def process_sale_payment(sale):
+    if sale.paid_amount < 0:
+        raise ValidationError('Оплата не может быть отрицательной')
     if sale.paid_amount > sale.total_amount:
         raise ValidationError('Оплата больше суммы продажи')
 
@@ -121,6 +143,8 @@ def process_sale_payment(sale):
 
 
 def process_purchase_payment(purchase):
+    if purchase.paid_amount < 0:
+        raise ValidationError('Оплата не может быть отрицательной')
     if purchase.paid_amount > purchase.total_amount:
         raise ValidationError('Оплата больше суммы закупки')
 
@@ -230,7 +254,7 @@ class EmployeeListCreateView(ListCreateAPIView):
     queryset = Employee.objects.all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsHRWorker]
-    filterset_fields = ['organization', 'branch', 'department', 'position', 'is_active']
+    filterset_fields = ['organization', 'branch', 'department', 'position', 'status']
     search_fields = ['user__username', 'user__first_name', 'user__last_name']
 
 class EmployeeDetailView(RetrieveUpdateDestroyAPIView):
@@ -245,7 +269,8 @@ class SalaryPaymentListCreateView(ListCreateAPIView):
     permission_classes = [IsHRWorker]
 
 
-class SalaryPaymentDetailView(RetrieveUpdateDestroyAPIView):
+class SalaryPaymentDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+    protected_statuses = ('PAID',)
     queryset = SalaryPayment.objects.all()
     serializer_class = SalaryPaymentSerializer
     permission_classes = [IsHRWorker]
@@ -260,6 +285,8 @@ class PaySalaryView(APIView):
             return Response({'error': 'Зарплата уже выплачена'}, status=400)
         if not salary.cash_account_id:
             return Response({'error': 'Выберите кассу'}, status=400)
+        if salary.amount <= 0:
+            return Response({'error': 'Сумма должна быть больше 0'}, status=400)
 
         with transaction.atomic():
             salary = SalaryPayment.objects.select_for_update().get(pk=salary.pk)
@@ -469,7 +496,8 @@ class PurchaseItemListCreateView(ListCreateAPIView):
     permission_classes = [IsPurchaseWorker]
 
 
-class PurchaseItemDetailView(RetrieveUpdateDestroyAPIView):
+class PurchaseItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+    document_field = 'purchase'
     queryset = PurchaseItem.objects.all()
     serializer_class = PurchaseItemSerializer
     permission_classes = [IsPurchaseWorker]
@@ -496,6 +524,9 @@ class PostPurchaseView(APIView):
             )
 
         with transaction.atomic():
+            purchase = Purchase.objects.select_for_update().get(pk=purchase.pk)
+            if purchase.status == 'POSTED':
+                return Response({'error': 'Закупка уже проведена'}, status=400)
             total_amount = Decimal('0')
 
             for item in items:
@@ -508,7 +539,7 @@ class PostPurchaseView(APIView):
 
                 total_amount += item_total
 
-                stock, created = Stock.objects.get_or_create(
+                stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=purchase.warehouse,
                     product=item.product,
                     defaults={
@@ -589,6 +620,11 @@ class UnpostPurchaseView(APIView):
         items = PurchaseItem.objects.filter(purchase=purchase)
 
         with transaction.atomic():
+            purchase = Purchase.objects.select_for_update().get(pk=purchase.pk)
+            if purchase.status != 'POSTED':
+                return Response({'error': 'Закупка не проведена'}, status=400)
+
+            prepared = []
             for item in items:
                 stock = Stock.objects.select_for_update().filter(
                     warehouse=purchase.warehouse,
@@ -611,6 +647,17 @@ class UnpostPurchaseView(APIView):
                         status=400
                     )
 
+                prepared.append((item, stock))
+
+            for item, stock in prepared:
+                new_quantity = stock.quantity - item.quantity
+                if new_quantity > 0:
+                    stock.average_cost = (
+                        stock.quantity * stock.average_cost
+                        - item.quantity * item.price
+                    ) / new_quantity
+                else:
+                    stock.average_cost = Decimal('0')
                 stock.quantity -= item.quantity
                 stock.save()
 
@@ -671,7 +718,8 @@ class SaleItemListCreateView(ListCreateAPIView):
     permission_classes = [IsSalesWorker]
 
 
-class SaleItemDetailView(RetrieveUpdateDestroyAPIView):
+class SaleItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+    document_field = 'sale'
     queryset = SaleItem.objects.all()
     serializer_class = SaleItemSerializer
     permission_classes = [IsSalesWorker]
@@ -698,6 +746,9 @@ class PostSaleView(APIView):
             )
 
         with transaction.atomic():
+            sale = Sale.objects.select_for_update().get(pk=sale.pk)
+            if sale.status == 'POSTED':
+                return Response({'error': 'Продажа уже проведена'}, status=400)
             stock_list = []
 
             for item in items:
@@ -804,8 +855,11 @@ class UnpostSaleView(APIView):
         items = SaleItem.objects.filter(sale=sale)
 
         with transaction.atomic():
+            sale = Sale.objects.select_for_update().get(pk=sale.pk)
+            if sale.status != 'POSTED':
+                return Response({'error': 'Продажа не проведена'}, status=400)
             for item in items:
-                stock, created = Stock.objects.get_or_create(
+                stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=sale.warehouse,
                     product=item.product,
                     defaults={
@@ -874,7 +928,8 @@ class StockTransferItemListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class StockTransferItemDetailView(RetrieveUpdateDestroyAPIView):
+class StockTransferItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+    document_field = 'transfer'
     queryset = StockTransferItem.objects.all()
     serializer_class = StockTransferItemSerializer
     permission_classes = [IsWarehouseWorker]
@@ -909,6 +964,9 @@ class PostStockTransferView(APIView):
             )
 
         with transaction.atomic():
+            transfer = StockTransfer.objects.select_for_update().get(pk=transfer.pk)
+            if transfer.status == 'POSTED':
+                return Response({'error': 'Перемещение уже проведено'}, status=400)
             prepared = []
 
             for item in items:
@@ -941,7 +999,7 @@ class PostStockTransferView(APIView):
                 from_stock.quantity -= item.quantity
                 from_stock.save()
 
-                to_stock, created = Stock.objects.get_or_create(
+                to_stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=transfer.to_warehouse,
                     product=item.product,
                     defaults={
@@ -1010,6 +1068,11 @@ class UnpostStockTransferView(APIView):
         )
 
         with transaction.atomic():
+            transfer = StockTransfer.objects.select_for_update().get(pk=transfer.pk)
+            if transfer.status != 'POSTED':
+                return Response({'error': 'Перемещение не проведено'}, status=400)
+
+            prepared = []
             for item in items:
                 to_stock = Stock.objects.select_for_update().filter(
                     warehouse=transfer.to_warehouse,
@@ -1032,10 +1095,13 @@ class UnpostStockTransferView(APIView):
                         status=400
                     )
 
+                prepared.append((item, to_stock))
+
+            for item, to_stock in prepared:
                 to_stock.quantity -= item.quantity
                 to_stock.save()
 
-                from_stock, created = Stock.objects.get_or_create(
+                from_stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=transfer.from_warehouse,
                     product=item.product,
                     defaults={
@@ -1089,7 +1155,8 @@ class WriteOffItemListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class WriteOffItemDetailView(RetrieveUpdateDestroyAPIView):
+class WriteOffItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+    document_field = 'write_off'
     queryset = WriteOffItem.objects.all()
     serializer_class = WriteOffItemSerializer
     permission_classes = [IsWarehouseWorker]
@@ -1118,6 +1185,9 @@ class PostWriteOffView(APIView):
             )
 
         with transaction.atomic():
+            write_off = WriteOff.objects.select_for_update().get(pk=write_off.pk)
+            if write_off.status == 'POSTED':
+                return Response({'error': 'Списание уже проведено'}, status=400)
             prepared = []
 
             for item in items:
@@ -1196,8 +1266,11 @@ class UnpostWriteOffView(APIView):
         )
 
         with transaction.atomic():
+            write_off = WriteOff.objects.select_for_update().get(pk=write_off.pk)
+            if write_off.status != 'POSTED':
+                return Response({'error': 'Списание не проведено'}, status=400)
             for item in items:
-                stock, created = Stock.objects.get_or_create(
+                stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=write_off.warehouse,
                     product=item.product,
                     defaults={
@@ -1251,7 +1324,8 @@ class InventoryItemListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class InventoryItemDetailView(RetrieveUpdateDestroyAPIView):
+class InventoryItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+    document_field = 'inventory'
     queryset = InventoryItem.objects.all()
     serializer_class = InventoryItemSerializer
     permission_classes = [IsWarehouseWorker]
@@ -1280,8 +1354,11 @@ class PostInventoryView(APIView):
             )
 
         with transaction.atomic():
+            inventory = Inventory.objects.select_for_update().get(pk=inventory.pk)
+            if inventory.status == 'POSTED':
+                return Response({'error': 'Инвентаризация уже проведена'}, status=400)
             for item in items:
-                stock, created = Stock.objects.get_or_create(
+                stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=inventory.warehouse,
                     product=item.product,
                     defaults={
@@ -1348,8 +1425,11 @@ class UnpostInventoryView(APIView):
         )
 
         with transaction.atomic():
+            inventory = Inventory.objects.select_for_update().get(pk=inventory.pk)
+            if inventory.status != 'POSTED':
+                return Response({'error': 'Инвентаризация не проведена'}, status=400)
             for item in items:
-                stock, created = Stock.objects.get_or_create(
+                stock, created = Stock.objects.select_for_update().get_or_create(
                     warehouse=inventory.warehouse,
                     product=item.product,
                     defaults={
@@ -1415,7 +1495,7 @@ class CashTransactionListCreateView(ListCreateAPIView):
     permission_classes = [IsAccountant]
 
 
-class CashTransactionDetailView(RetrieveUpdateDestroyAPIView):
+class CashTransactionDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = CashTransaction.objects.all()
     serializer_class = CashTransactionSerializer
     permission_classes = [IsAccountant]
@@ -1435,6 +1515,8 @@ class PostCashTransactionView(APIView):
                 {'error': 'Операция уже проведена'},
                 status=400
             )
+        if cash_transaction.amount <= 0:
+            return Response({'error': 'Сумма должна быть больше 0'}, status=400)
 
         with transaction.atomic():
             account = CashAccount.objects.select_for_update().get(
@@ -1812,13 +1894,28 @@ class PostSaleReturnView(APIView):
         if not items.exists():
             return Response({'error':'Нет товаров'},status=400)
         with transaction.atomic():
+            sale_return = SaleReturn.objects.select_for_update().get(pk=sale_return.pk)
+            if sale_return.status == 'POSTED':
+                return Response({'error':'Возврат уже проведён'},status=400)
+            if sale_return.sale.status != 'POSTED':
+                return Response({'error':'Продажа не проведена'},status=400)
+            if sale_return.warehouse_id != sale_return.sale.warehouse_id:
+                return Response({'error':'Склад возврата должен совпадать со складом продажи'},status=400)
+            requested_items = items.values('product_id').annotate(total=Sum('quantity'))
+            for requested in requested_items:
+                sold = SaleItem.objects.filter(sale=sale_return.sale,product_id=requested['product_id']).aggregate(total=Sum('quantity'))['total'] or 0
+                returned = SaleReturnItem.objects.filter(sale_return__sale=sale_return.sale,sale_return__status='POSTED',product_id=requested['product_id']).aggregate(total=Sum('quantity'))['total'] or 0
+                if requested['total'] > sold-returned:
+                    product = Product.objects.get(pk=requested['product_id'])
+                    return Response({'error':f'Количество возврата товара {product} превышает проданное'},status=400)
             for item in items:
-                stock,created = Stock.objects.get_or_create(warehouse=sale_return.warehouse,product=item.product,defaults={'quantity':0,'average_cost':0})
+                stock,created = Stock.objects.select_for_update().get_or_create(warehouse=sale_return.warehouse,product=item.product,defaults={'quantity':0,'average_cost':0})
                 stock.quantity += item.quantity
                 stock.save()
                 StockMovement.objects.create(warehouse=sale_return.warehouse,product=item.product,movement_type='RETURN_IN',quantity=item.quantity,unit_cost=stock.average_cost,document_type='SALE_RETURN',document_id=sale_return.id,comment=f'Возврат продажи {sale_return.number}')
             sale_return.status = 'POSTED'
             sale_return.save()
+            create_audit(request,'POST',sale_return,f'Проведён возврат продажи №{sale_return.number}')
         return Response({'message':'Возврат продажи проведён'})
 
 
@@ -1832,6 +1929,20 @@ class PostPurchaseReturnView(APIView):
         if not items.exists():
             return Response({'error':'Нет товаров'},status=400)
         with transaction.atomic():
+            purchase_return = PurchaseReturn.objects.select_for_update().get(pk=purchase_return.pk)
+            if purchase_return.status == 'POSTED':
+                return Response({'error':'Возврат уже проведён'},status=400)
+            if purchase_return.purchase.status != 'POSTED':
+                return Response({'error':'Закупка не проведена'},status=400)
+            if purchase_return.warehouse_id != purchase_return.purchase.warehouse_id:
+                return Response({'error':'Склад возврата должен совпадать со складом закупки'},status=400)
+            requested_items = items.values('product_id').annotate(total=Sum('quantity'))
+            for requested in requested_items:
+                purchased = PurchaseItem.objects.filter(purchase=purchase_return.purchase,product_id=requested['product_id']).aggregate(total=Sum('quantity'))['total'] or 0
+                returned = PurchaseReturnItem.objects.filter(purchase_return__purchase=purchase_return.purchase,purchase_return__status='POSTED',product_id=requested['product_id']).aggregate(total=Sum('quantity'))['total'] or 0
+                if requested['total'] > purchased-returned:
+                    product = Product.objects.get(pk=requested['product_id'])
+                    return Response({'error':f'Количество возврата товара {product} превышает закупленное'},status=400)
             prepared = []
             for item in items:
                 stock = Stock.objects.select_for_update().filter(warehouse=purchase_return.warehouse,product=item.product).first()
@@ -1844,4 +1955,5 @@ class PostPurchaseReturnView(APIView):
                 StockMovement.objects.create(warehouse=purchase_return.warehouse,product=item.product,movement_type='RETURN_OUT',quantity=item.quantity,unit_cost=stock.average_cost,document_type='PURCHASE_RETURN',document_id=purchase_return.id,comment=f'Возврат поставщику {purchase_return.number}')
             purchase_return.status = 'POSTED'
             purchase_return.save()
+            create_audit(request,'POST',purchase_return,f'Проведён возврат поставщику №{purchase_return.number}')
         return Response({'message':'Возврат поставщику проведён'})

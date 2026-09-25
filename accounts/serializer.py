@@ -17,6 +17,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             'phone',
             'role',
         ]
+        read_only_fields = ['role']
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -50,6 +51,8 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id',
             'is_verified',
+            'role',
+            'is_active',
             'created_at',
         ]
 

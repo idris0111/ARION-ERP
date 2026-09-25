@@ -133,6 +133,8 @@ urlpatterns = [
     path('export/sales/',ExportSalesView.as_view()),
     path('export/purchases/',ExportPurchasesView.as_view()),
     path('export/debts/',ExportDebtsView.as_view()),
+    path('export/employees/',ExportEmployeesView.as_view()),
+    path('export/cash-transactions/',ExportCashTransactionsView.as_view()),
     path('export/excel/products/',ExportProductsExcelView.as_view()),
     path('export/excel/stocks/',ExportStocksExcelView.as_view()),
     path('export/excel/sales/',ExportSalesExcelView.as_view()),

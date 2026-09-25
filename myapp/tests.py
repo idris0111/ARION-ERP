@@ -1,14 +1,14 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import resolve
 from django.utils import timezone
-from rest_framework.test import APIRequestFactory, force_authenticate
+from rest_framework.test import APIClient, APIRequestFactory, force_authenticate
 
 from .models import (
     AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Employee, Notification,
-    Inventory, Organization, Product, Purchase, PurchaseItem, PurchaseReturn,
+    Inventory, InventoryItem, MoneyTransfer, Organization, Product, Purchase, PurchaseItem, PurchaseReturn,
     PurchaseReturnItem, Sale, SaleItem, SaleReturn, SaleReturnItem, SalaryPayment,
     Stock, StockMovement, StockTransfer, StockTransferItem, Warehouse, WriteOff,
     WriteOffItem,
@@ -20,12 +20,16 @@ from .serializers import (
 )
 from .views import (
     CheckLowStockView, NotificationListView, PayDebtView, PaySalaryView,
-    InventoryDetailView, PostPurchaseView, PostSaleView, PurchaseDetailView,
-    PurchaseReturnDetailView, ReadAllNotificationsView, ReadNotificationView,
-    SaleDetailView, SaleReturnDetailView, StockDetailView, StockListView,
-    StockTransferDetailView, UnpostPurchaseView, UnpostSaleView,
-    UnreadNotificationListView, WriteOffDetailView, notify_roles,
+    InventoryDetailView, MoneyTransferListCreateView, PostInventoryView,
+    PostPurchaseReturnView, PostPurchaseView, PostSaleReturnView, PostSaleView,
+    PostStockTransferView, PostWriteOffView, PurchaseDetailView,
+    PurchaseItemDetailView, PurchaseReturnDetailView, ReadAllNotificationsView,
+    ReadNotificationView, SaleDetailView, SaleReturnDetailView, StockDetailView,
+    StockListView, StockTransferDetailView, UnpostInventoryView,
+    UnpostPurchaseView, UnpostSaleView, UnpostStockTransferView,
+    UnpostWriteOffView, UnreadNotificationListView, WriteOffDetailView, notify_roles,
 )
+from .reports import ProfitReportView
 
 
 class DocumentPaymentTests(TestCase):
@@ -514,3 +518,521 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['low_stock_count'], 0)
         self.assertFalse(Notification.objects.exists())
+
+    def test_document_and_item_serializer_validation(self):
+        purchase = self.make_document('purchase', 0)
+        sale = self.make_document('sale', 0)
+        purchase_item = purchase.items.get()
+        sale_item = sale.items.get()
+
+        for serializer_class, instance in [
+            (PurchaseItemSerializer, purchase_item),
+            (SaleItemSerializer, sale_item),
+        ]:
+            for field, value, message in [
+                ('quantity', 0, 'Количество должно быть больше 0'),
+                ('price', -1, 'Цена не может быть отрицательной'),
+            ]:
+                with self.subTest(serializer=serializer_class.__name__, field=field):
+                    serializer = serializer_class(
+                        instance, data={field: value}, partial=True
+                    )
+                    self.assertFalse(serializer.is_valid())
+                    self.assertEqual(str(serializer.errors[field][0]), message)
+
+        purchase.status = 'POSTED'
+        purchase.save()
+        serializer = PurchaseItemSerializer(
+            purchase_item, data={'quantity': 3}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Нельзя менять проведённую закупку', str(serializer.errors))
+
+        sale.status = 'POSTED'
+        sale.save()
+        serializer = SaleItemSerializer(sale_item, data={'quantity': 3}, partial=True)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Нельзя менять проведённую продажу', str(serializer.errors))
+
+        second_warehouse = Warehouse.objects.create(
+            organization=self.organization, name='Second warehouse'
+        )
+        transfer = StockTransfer.objects.create(
+            organization=self.organization,
+            from_warehouse=self.warehouse,
+            to_warehouse=second_warehouse,
+            number='TRANSFER-VALIDATION',
+            date=timezone.now(),
+            created_by=self.user,
+        )
+        transfer_item = StockTransferItem.objects.create(
+            transfer=transfer, product=self.product, quantity=1
+        )
+        serializer = StockTransferItemSerializer(
+            transfer_item, data={'quantity': 0}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertEqual(
+            str(serializer.errors['quantity'][0]),
+            'Количество должно быть больше 0',
+        )
+        transfer.status = 'POSTED'
+        transfer.save()
+        serializer = StockTransferItemSerializer(
+            transfer_item, data={'quantity': 2}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Нельзя менять проведённое перемещение', str(serializer.errors))
+
+        write_off = WriteOff.objects.create(
+            organization=self.organization,
+            warehouse=self.warehouse,
+            number='WRITE-OFF-VALIDATION',
+            date=timezone.now(),
+            reason='OTHER',
+            created_by=self.user,
+        )
+        write_off_item = WriteOffItem.objects.create(
+            write_off=write_off, product=self.product, quantity=1
+        )
+        serializer = WriteOffItemSerializer(
+            write_off_item, data={'quantity': 0}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertEqual(
+            str(serializer.errors['quantity'][0]),
+            'Количество должно быть больше 0',
+        )
+        write_off.status = 'POSTED'
+        write_off.save()
+        serializer = WriteOffItemSerializer(
+            write_off_item, data={'quantity': 2}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Нельзя менять проведённое списание', str(serializer.errors))
+
+        sale_return = SaleReturn.objects.create(
+            number='SALE-RETURN-VALIDATION',
+            sale=sale,
+            warehouse=self.warehouse,
+        )
+        sale_return_item = SaleReturnItem.objects.create(
+            sale_return=sale_return,
+            product=self.product,
+            quantity=1,
+            price=1,
+        )
+        purchase_return = PurchaseReturn.objects.create(
+            number='PURCHASE-RETURN-VALIDATION',
+            purchase=purchase,
+            warehouse=self.warehouse,
+        )
+        purchase_return_item = PurchaseReturnItem.objects.create(
+            purchase_return=purchase_return,
+            product=self.product,
+            quantity=1,
+            price=1,
+        )
+        for serializer_class, instance in [
+            (SaleReturnItemSerializer, sale_return_item),
+            (PurchaseReturnItemSerializer, purchase_return_item),
+        ]:
+            for field, value, message in [
+                ('quantity', 0, 'Количество должно быть больше 0'),
+                ('price', -1, 'Цена не может быть отрицательной'),
+            ]:
+                with self.subTest(serializer=serializer_class.__name__, field=field):
+                    serializer = serializer_class(
+                        instance, data={field: value}, partial=True
+                    )
+                    self.assertFalse(serializer.is_valid())
+                    self.assertEqual(str(serializer.errors[field][0]), message)
+
+        for serializer_class in (PurchaseSerializer, SaleSerializer):
+            serializer = serializer_class(data={'paid_amount': -1}, partial=True)
+            self.assertFalse(serializer.is_valid())
+            self.assertEqual(
+                str(serializer.errors['paid_amount'][0]),
+                'Оплата не может быть отрицательной',
+            )
+
+        serializer = StockTransferSerializer(
+            data={
+                'from_warehouse': self.warehouse.pk,
+                'to_warehouse': self.warehouse.pk,
+            },
+            partial=True,
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('Склады должны быть разными', str(serializer.errors))
+
+    def test_posted_document_detail_views_reject_changes_and_deletion(self):
+        purchase = self.make_document('purchase', 0)
+        sale = self.make_document('sale', 0)
+        second_warehouse = Warehouse.objects.create(
+            organization=self.organization, name='Second warehouse'
+        )
+        documents = [
+            (
+                PurchaseDetailView,
+                purchase,
+            ),
+            (
+                SaleDetailView,
+                sale,
+            ),
+            (
+                StockTransferDetailView,
+                StockTransfer.objects.create(
+                    organization=self.organization,
+                    from_warehouse=self.warehouse,
+                    to_warehouse=second_warehouse,
+                    number='TRANSFER-PROTECT',
+                    date=timezone.now(),
+                    status='POSTED',
+                    created_by=self.user,
+                ),
+            ),
+            (
+                WriteOffDetailView,
+                WriteOff.objects.create(
+                    organization=self.organization,
+                    warehouse=self.warehouse,
+                    number='WRITE-OFF-PROTECT',
+                    date=timezone.now(),
+                    reason='OTHER',
+                    status='POSTED',
+                    created_by=self.user,
+                ),
+            ),
+            (
+                InventoryDetailView,
+                Inventory.objects.create(
+                    organization=self.organization,
+                    warehouse=self.warehouse,
+                    number='INVENTORY-PROTECT',
+                    date=timezone.now(),
+                    status='POSTED',
+                    created_by=self.user,
+                ),
+            ),
+        ]
+        purchase.status = 'POSTED'
+        purchase.save()
+        sale.status = 'POSTED'
+        sale.save()
+        documents.extend([
+            (
+                SaleReturnDetailView,
+                SaleReturn.objects.create(
+                    number='SALE-RETURN-PROTECT',
+                    sale=sale,
+                    warehouse=self.warehouse,
+                    status='POSTED',
+                ),
+            ),
+            (
+                PurchaseReturnDetailView,
+                PurchaseReturn.objects.create(
+                    number='PURCHASE-RETURN-PROTECT',
+                    purchase=purchase,
+                    warehouse=self.warehouse,
+                    status='POSTED',
+                ),
+            ),
+        ])
+
+        for view_class, document in documents:
+            with self.subTest(view=view_class.__name__, method='patch'):
+                request = self.factory.patch('/', {'comment': 'changed'}, format='json')
+                force_authenticate(request, user=self.user)
+                response = view_class.as_view()(request, pk=document.pk)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    response.data['error'],
+                    'Нельзя изменять проведённый документ',
+                )
+                document.refresh_from_db()
+                self.assertEqual(document.comment, '')
+
+            with self.subTest(view=view_class.__name__, method='delete'):
+                request = self.factory.delete('/')
+                force_authenticate(request, user=self.user)
+                response = view_class.as_view()(request, pk=document.pk)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(
+                    response.data['error'],
+                    'Нельзя удалить проведённый документ',
+                )
+                self.assertTrue(type(document).objects.filter(pk=document.pk).exists())
+
+    def test_draft_document_can_be_updated_and_deleted(self):
+        purchase = self.make_document('purchase', 0)
+        request = self.factory.patch('/', {'comment': 'changed'}, format='json')
+        force_authenticate(request, user=self.user)
+        response = PurchaseDetailView.as_view()(request, pk=purchase.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        purchase.refresh_from_db()
+        self.assertEqual(purchase.comment, 'changed')
+
+        request = self.factory.delete('/')
+        force_authenticate(request, user=self.user)
+        response = PurchaseDetailView.as_view()(request, pk=purchase.pk)
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Purchase.objects.filter(pk=purchase.pk).exists())
+
+    def test_stock_api_is_read_only(self):
+        for request, view, kwargs in [
+            (self.factory.post('/', {}), StockListView, {}),
+            (self.factory.put('/', {}), StockDetailView, {'pk': self.stock.pk}),
+            (self.factory.delete('/'), StockDetailView, {'pk': self.stock.pk}),
+        ]:
+            force_authenticate(request, user=self.user)
+            response = view.as_view()(request, **kwargs)
+            self.assertEqual(response.status_code, 405)
+
+    def test_sale_cannot_exceed_stock(self):
+        sale = Sale.objects.create(
+            organization=self.organization, customer=self.counterparty,
+            warehouse=self.warehouse, number='SALE-TOO-MUCH', date=timezone.now(),
+            created_by=self.user,
+        )
+        SaleItem.objects.create(sale=sale, product=self.product, quantity=11, price=10)
+        response = self.request_action('sale', 'post', sale)
+        self.assertEqual(response.status_code, 400)
+        sale.refresh_from_db()
+        self.stock.refresh_from_db()
+        self.assertEqual(sale.status, 'DRAFT')
+        self.assertEqual(self.stock.quantity, 10)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_stock_transfer_post_and_unpost(self):
+        destination = Warehouse.objects.create(
+            organization=self.organization, name='Destination'
+        )
+        transfer = StockTransfer.objects.create(
+            organization=self.organization, from_warehouse=self.warehouse,
+            to_warehouse=destination, number='TRANSFER-1', date=timezone.now(),
+            created_by=self.user,
+        )
+        StockTransferItem.objects.create(
+            transfer=transfer, product=self.product, quantity=3
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = PostStockTransferView.as_view()(request, pk=transfer.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        destination_stock = Stock.objects.get(warehouse=destination, product=self.product)
+        self.assertEqual(self.stock.quantity, 7)
+        self.assertEqual(destination_stock.quantity, 3)
+        self.assertSetEqual(
+            set(StockMovement.objects.values_list('movement_type', flat=True)),
+            {'TRANSFER_OUT', 'TRANSFER_IN'},
+        )
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = UnpostStockTransferView.as_view()(request, pk=transfer.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        destination_stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 10)
+        self.assertEqual(destination_stock.quantity, 0)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_write_off_post_and_unpost(self):
+        write_off = WriteOff.objects.create(
+            organization=self.organization, warehouse=self.warehouse,
+            number='WRITE-OFF-1', date=timezone.now(), reason='OTHER',
+            created_by=self.user,
+        )
+        WriteOffItem.objects.create(
+            write_off=write_off, product=self.product, quantity=3
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = PostWriteOffView.as_view()(request, pk=write_off.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 7)
+        self.assertTrue(StockMovement.objects.filter(movement_type='WRITE_OFF').exists())
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = UnpostWriteOffView.as_view()(request, pk=write_off.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 10)
+        self.assertFalse(StockMovement.objects.exists())
+
+    def test_inventory_post_and_unpost(self):
+        inventory = Inventory.objects.create(
+            organization=self.organization, warehouse=self.warehouse,
+            number='INVENTORY-1', date=timezone.now(), created_by=self.user,
+        )
+        item = InventoryItem.objects.create(
+            inventory=inventory, product=self.product, actual_quantity=4
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = PostInventoryView.as_view()(request, pk=inventory.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        item.refresh_from_db()
+        self.stock.refresh_from_db()
+        self.assertEqual(item.system_quantity, 10)
+        self.assertEqual(item.difference, -6)
+        self.assertEqual(self.stock.quantity, 4)
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = UnpostInventoryView.as_view()(request, pk=inventory.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 10)
+
+    def test_returns_change_stock_and_create_valid_movements(self):
+        sale = self.make_document('sale', 0)
+        purchase = self.make_document('purchase', 0)
+        sale.status = 'POSTED'
+        sale.save()
+        purchase.status = 'POSTED'
+        purchase.save()
+        sale_return = SaleReturn.objects.create(
+            number='SALE-RETURN-1', sale=sale, warehouse=self.warehouse
+        )
+        SaleReturnItem.objects.create(
+            sale_return=sale_return, product=self.product, quantity=1, price=50
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = PostSaleReturnView.as_view()(request, pk=sale_return.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 11)
+
+        purchase_return = PurchaseReturn.objects.create(
+            number='PURCHASE-RETURN-1', purchase=purchase, warehouse=self.warehouse
+        )
+        PurchaseReturnItem.objects.create(
+            purchase_return=purchase_return, product=self.product, quantity=2, price=50
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = PostPurchaseReturnView.as_view()(request, pk=purchase_return.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 9)
+        for movement in StockMovement.objects.all():
+            movement.full_clean()
+
+    def test_money_transfer_and_insufficient_balance(self):
+        destination = CashAccount.objects.create(
+            organization=self.organization, name='Bank', account_type='BANK', balance=20
+        )
+        data = {
+            'organization': self.organization.pk,
+            'from_account': self.account.pk,
+            'to_account': destination.pk,
+            'amount': '50.00',
+            'date': timezone.now().isoformat(),
+        }
+        request = self.factory.post('/', data, format='json')
+        force_authenticate(request, user=self.user)
+        response = MoneyTransferListCreateView.as_view()(request)
+        self.assertEqual(response.status_code, 201, response.data)
+        self.account.refresh_from_db()
+        destination.refresh_from_db()
+        self.assertEqual(self.account.balance, 150)
+        self.assertEqual(destination.balance, 70)
+        self.assertEqual(MoneyTransfer.objects.count(), 1)
+
+        data['amount'] = '999.00'
+        request = self.factory.post('/', data, format='json')
+        force_authenticate(request, user=self.user)
+        response = MoneyTransferListCreateView.as_view()(request)
+        self.assertEqual(response.status_code, 400)
+        self.account.refresh_from_db()
+        destination.refresh_from_db()
+        self.assertEqual(self.account.balance, 150)
+        self.assertEqual(destination.balance, 70)
+        self.assertEqual(MoneyTransfer.objects.count(), 1)
+
+    def test_profit_report_uses_sale_movements_cost(self):
+        sale = Sale.objects.create(
+            organization=self.organization, customer=self.counterparty,
+            warehouse=self.warehouse, number='SALE-REPORT', date=timezone.now(),
+            status='POSTED', total_amount=100, created_by=self.user,
+        )
+        StockMovement.objects.create(
+            warehouse=self.warehouse, product=self.product, movement_type='OUT',
+            quantity=2, unit_cost=30, document_type='SALE', document_id=sale.pk,
+        )
+        request = self.factory.get('/')
+        force_authenticate(request, user=self.user)
+        response = ProfitReportView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['revenue'], Decimal('100'))
+        self.assertEqual(response.data['cost'], Decimal('60'))
+        self.assertEqual(response.data['profit'], Decimal('40'))
+
+    def test_failed_purchase_unpost_does_not_partially_change_stock(self):
+        purchase = self.make_document('purchase', 0)
+        second_product = Product.objects.create(
+            organization=self.organization, name='Second', sku='P2'
+        )
+        PurchaseItem.objects.create(
+            purchase=purchase, product=second_product, quantity=2, price=10
+        )
+        second_stock = Stock.objects.create(
+            warehouse=self.warehouse, product=second_product, quantity=1
+        )
+        purchase.status = 'POSTED'
+        purchase.save()
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = UnpostPurchaseView.as_view()(request, pk=purchase.pk)
+        self.assertEqual(response.status_code, 400)
+        self.stock.refresh_from_db()
+        second_stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity, 10)
+        self.assertEqual(second_stock.quantity, 1)
+
+    def test_posted_item_cannot_be_deleted(self):
+        purchase = self.make_document('purchase', 0)
+        item = purchase.items.get()
+        purchase.status = 'POSTED'
+        purchase.save()
+        request = self.factory.delete('/')
+        force_authenticate(request, user=self.user)
+        response = PurchaseItemDetailView.as_view()(request, pk=item.pk)
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(PurchaseItem.objects.filter(pk=item.pk).exists())
+
+    @override_settings(ALLOWED_HOSTS=['testserver'])
+    def test_swagger_schema_builds(self):
+        response = APIClient().get('/swagger/?format=openapi')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('application/openapi+json', response['Content-Type'])
+
+    def test_csv_and_excel_exports(self):
+        client = APIClient()
+        client.force_authenticate(self.user)
+        for path, content_type in [
+            ('/api/export/employees/', 'text/csv'),
+            ('/api/export/cash-transactions/', 'text/csv'),
+            (
+                '/api/export/excel/employees/',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ),
+            (
+                '/api/export/excel/cash-transactions/',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ),
+        ]:
+            with self.subTest(path=path):
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response['Content-Type'], content_type)
+                self.assertTrue(response.content)

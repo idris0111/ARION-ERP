@@ -254,6 +254,8 @@ class StockMovement(models.Model):
         ('TRANSFER_OUT', 'Перемещение расход'),
         ('WRITE_OFF', 'Списание'),
         ('INVENTORY', 'Инвентаризация'),
+        ('RETURN_IN', 'Возврат продажи'),
+        ('RETURN_OUT', 'Возврат поставщику'),
     ]
 
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='movements')

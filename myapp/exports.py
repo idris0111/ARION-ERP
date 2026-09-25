@@ -2,7 +2,7 @@ import csv
 from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
-from .models import Product,Stock,Sale,Purchase,Debt
+from .models import Product,Stock,Sale,Purchase,Debt,Employee,CashTransaction
 
 def export_csv(queryset,filename):
     response = HttpResponse(content_type='text/csv')
@@ -38,3 +38,13 @@ class ExportDebtsView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
         return export_csv(Debt.objects.all(),'debts')
+
+class ExportEmployeesView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self,request):
+        return export_csv(Employee.objects.all(),'employees')
+
+class ExportCashTransactionsView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self,request):
+        return export_csv(CashTransaction.objects.all(),'cash_transactions')

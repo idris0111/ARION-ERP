@@ -34,6 +34,11 @@ from .models import (
     MoneyTransfer,
     Debt,
     AuditLog,
+    SaleReturn,
+    SaleReturnItem,
+    PurchaseReturn,
+    PurchaseReturnItem,
+    Notification,
 )
 
 
@@ -81,3 +86,8 @@ admin.site.register(MoneyTransfer)
 
 admin.site.register(Debt)
 admin.site.register(AuditLog)
+admin.site.register(SaleReturn)
+admin.site.register(SaleReturnItem)
+admin.site.register(PurchaseReturn)
+admin.site.register(PurchaseReturnItem)
+admin.site.register(Notification)
