@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import uuid4
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -46,6 +47,80 @@ def calculate_payment_status(total_amount, paid_amount):
         return 'PARTIAL'
 
     return 'PAID'
+
+
+def process_sale_payment(sale):
+    if sale.paid_amount > sale.total_amount:
+        raise ValidationError('Оплата больше суммы продажи')
+
+    if sale.paid_amount > 0:
+        if not sale.cash_account_id:
+            raise ValidationError('Выберите кассу для оплаты')
+        account = CashAccount.objects.select_for_update().get(pk=sale.cash_account_id)
+        account.balance += sale.paid_amount
+        account.save()
+        CashTransaction.objects.create(
+            organization=sale.organization,
+            account=account,
+            counterparty=sale.customer,
+            number=f'SALE-{uuid4().hex}',
+            date=sale.date,
+            created_by=sale.created_by,
+            transaction_type='INCOME',
+            amount=sale.paid_amount,
+            status='POSTED',
+            sale=sale,
+        )
+
+    remaining = sale.total_amount - sale.paid_amount
+    if remaining > 0:
+        Debt.objects.create(
+            organization=sale.organization,
+            counterparty=sale.customer,
+            debt_type='CUSTOMER',
+            amount=remaining,
+            paid_amount=0,
+            status='OPEN',
+            sale=sale,
+        )
+
+
+def process_purchase_payment(purchase):
+    if purchase.paid_amount > purchase.total_amount:
+        raise ValidationError('Оплата больше суммы закупки')
+
+    if purchase.paid_amount > 0:
+        if not purchase.cash_account_id:
+            raise ValidationError('Выберите кассу для оплаты')
+        account = CashAccount.objects.select_for_update().get(pk=purchase.cash_account_id)
+        if account.balance < purchase.paid_amount:
+            raise ValidationError('Недостаточно денег в кассе')
+        account.balance -= purchase.paid_amount
+        account.save()
+        CashTransaction.objects.create(
+            organization=purchase.organization,
+            account=account,
+            counterparty=purchase.supplier,
+            number=f'PURCHASE-{uuid4().hex}',
+            date=purchase.date,
+            created_by=purchase.created_by,
+            transaction_type='EXPENSE',
+            amount=purchase.paid_amount,
+            status='POSTED',
+            purchase=purchase,
+        )
+
+    remaining = purchase.total_amount - purchase.paid_amount
+    if remaining > 0:
+        Debt.objects.create(
+            organization=purchase.organization,
+            counterparty=purchase.supplier,
+            debt_type='SUPPLIER',
+            amount=remaining,
+            paid_amount=0,
+            status='OPEN',
+            purchase=purchase,
+        )
 
 
 # =========================================================
@@ -385,6 +460,7 @@ class PostPurchaseView(APIView):
                 purchase.paid_amount
             )
 
+            process_purchase_payment(purchase)
             purchase.status = 'POSTED'
             purchase.save()
 
@@ -446,6 +522,19 @@ class UnpostPurchaseView(APIView):
                 document_type='PURCHASE',
                 document_id=purchase.id
             ).delete()
+
+            cash_transaction = CashTransaction.objects.filter(
+                purchase=purchase, status='POSTED'
+            ).first()
+            if cash_transaction:
+                account = CashAccount.objects.select_for_update().get(
+                    pk=cash_transaction.account_id
+                )
+                account.balance += cash_transaction.amount
+                account.save()
+                cash_transaction.delete()
+
+            Debt.objects.filter(purchase=purchase).delete()
 
             purchase.status = 'DRAFT'
             purchase.save()
@@ -580,6 +669,7 @@ class PostSaleView(APIView):
                 sale.paid_amount
             )
 
+            process_sale_payment(sale)
             sale.status = 'POSTED'
             sale.save()
 
@@ -629,6 +719,21 @@ class UnpostSaleView(APIView):
                 document_type='SALE',
                 document_id=sale.id
             ).delete()
+
+            cash_transaction = CashTransaction.objects.filter(
+                sale=sale, status='POSTED'
+            ).first()
+            if cash_transaction:
+                account = CashAccount.objects.select_for_update().get(
+                    pk=cash_transaction.account_id
+                )
+                if account.balance < cash_transaction.amount:
+                    raise ValidationError('Недостаточно денег для отмены продажи')
+                account.balance -= cash_transaction.amount
+                account.save()
+                cash_transaction.delete()
+
+            Debt.objects.filter(sale=sale).delete()
 
             sale.status = 'DRAFT'
             sale.save()
