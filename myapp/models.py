@@ -622,3 +622,33 @@ class PurchaseReturnItem(models.Model):
     price = models.DecimalField(max_digits=12,decimal_places=2,default=0)
     def __str__(self):
         return str(self.product)
+
+
+class Notification(models.Model):
+    TYPE_CHOICES = [
+        ('INFO', 'Info'),
+        ('SALE', 'Sale'),
+        ('PURCHASE', 'Purchase'),
+        ('STOCK', 'Stock'),
+        ('DEBT', 'Debt'),
+        ('SALARY', 'Salary'),
+        ('WARNING', 'Warning'),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notifications',
+    )
+    notification_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default='INFO',
+    )
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
