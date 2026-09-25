@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import resolve
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -130,6 +131,12 @@ class DocumentPaymentTests(TestCase):
                     self.assertEqual(document.payment_status, 'PARTIAL')
                     self.assertEqual(self.account.balance, 200 + direction * 40)
                     self.assertEqual(self.stock.quantity, 10 - direction * 2)
+                    notification = Notification.objects.filter(
+                        user=self.user,
+                        notification_type=kind.upper(),
+                    ).latest('created_at')
+                    self.assertIn(document.number, notification.message)
+                    self.assertIn(str(document.total_amount), notification.message)
                     payment = CashTransaction.objects.get(**{kind: document})
                     self.assertEqual(payment.amount, 40)
                     self.assertEqual(payment.transaction_type, 'INCOME' if kind == 'sale' else 'EXPENSE')
@@ -253,6 +260,7 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(payment.counterparty, self.counterparty)
         self.assertEqual(payment.created_by, self.user)
         payment.full_clean()
+        self.assertFalse(Notification.objects.filter(notification_type='DEBT').exists())
 
         response = self.pay_debt(debt, 60, self.account)
         self.assertEqual(response.status_code, 200, response.data)
@@ -263,6 +271,9 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(self.account.balance, 300)
         self.assertEqual(CashTransaction.objects.count(), 2)
         self.assertEqual(AuditLog.objects.filter(action='UPDATE').count(), 2)
+        notification = Notification.objects.get(notification_type='DEBT')
+        self.assertEqual(notification.title, 'Долг погашен')
+        self.assertIn(str(debt.id), notification.message)
 
     def test_supplier_debt_payment_moves_money(self):
         debt = self.make_debt('SUPPLIER')
@@ -337,6 +348,10 @@ class DocumentPaymentTests(TestCase):
                 action='POST', model_name='SalaryPayment', object_id=salary.pk
             ).exists()
         )
+        notification = Notification.objects.get(notification_type='SALARY')
+        self.assertEqual(notification.title, 'Зарплата выплачена')
+        self.assertIn(str(salary.employee), notification.message)
+        self.assertIn(str(salary.amount), notification.message)
 
         response = self.pay_salary(salary)
         self.assertEqual(response.status_code, 400)
@@ -449,3 +464,14 @@ class DocumentPaymentTests(TestCase):
         other.refresh_from_db()
         self.assertTrue(extra.is_read)
         self.assertFalse(other.is_read)
+
+    def test_notification_urls_resolve_to_expected_views(self):
+        routes = {
+            '/api/notifications/': NotificationListView,
+            '/api/notifications/unread/': UnreadNotificationListView,
+            '/api/notifications/1/read/': ReadNotificationView,
+            '/api/notifications/read-all/': ReadAllNotificationsView,
+        }
+        for path, view_class in routes.items():
+            with self.subTest(path=path):
+                self.assertIs(resolve(path).func.view_class, view_class)

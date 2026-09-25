@@ -272,6 +272,12 @@ class PaySalaryView(APIView):
                 salary,
                 f'Выплачена зарплата {salary.employee}',
             )
+            notify_roles(
+                ['ADMIN', 'DIRECTOR', 'HR'],
+                'Зарплата выплачена',
+                f'Выплачена зарплата сотруднику {salary.employee}: {salary.amount}',
+                'SALARY',
+            )
 
         return Response({
             'message': 'Зарплата выплачена',
@@ -534,6 +540,12 @@ class PostPurchaseView(APIView):
                 purchase,
                 f'Проведена закупка №{purchase.number}'
             )
+            notify_roles(
+                ['ADMIN', 'DIRECTOR', 'PURCHASE_MANAGER'],
+                'Новая закупка',
+                f'Закупка №{purchase.number} проведена на сумму {purchase.total_amount}',
+                'PURCHASE',
+            )
 
         return Response({
             'message': 'Закупка успешно проведена',
@@ -742,6 +754,12 @@ class PostSaleView(APIView):
                 'POST',
                 sale,
                 f'Проведена продажа №{sale.number}'
+            )
+            notify_roles(
+                ['ADMIN', 'DIRECTOR', 'SALES_MANAGER'],
+                'Новая продажа',
+                f'Продажа №{sale.number} проведена на сумму {sale.total_amount}',
+                'SALE',
             )
 
         return Response({
@@ -1628,6 +1646,13 @@ class PayDebtView(APIView):
             debt.save()
 
             create_audit(request, 'UPDATE', debt, f'Оплата долга {amount}')
+            if debt.status == 'PAID':
+                notify_roles(
+                    ['ADMIN', 'DIRECTOR', 'ACCOUNTANT'],
+                    'Долг погашен',
+                    f'Долг №{debt.id} полностью погашен',
+                    'DEBT',
+                )
 
         return Response({
             'message': 'Долг оплачен',

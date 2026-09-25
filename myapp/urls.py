@@ -95,6 +95,11 @@ urlpatterns = [
     path('debts/<int:pk>/', DebtDetailView.as_view()),
     path('debts/<int:pk>/pay/', PayDebtView.as_view()),
 
+    path('notifications/', NotificationListView.as_view()),
+    path('notifications/unread/', UnreadNotificationListView.as_view()),
+    path('notifications/<int:pk>/read/', ReadNotificationView.as_view()),
+    path('notifications/read-all/', ReadAllNotificationsView.as_view()),
+
     path('audit-logs/', AuditLogListView.as_view()),
     path('audit-logs/<int:pk>/', AuditLogDetailView.as_view()),
 
