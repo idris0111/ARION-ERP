@@ -6,13 +6,14 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from .models import (
-    AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Employee, Organization,
-    Product, Purchase, PurchaseItem, Sale, SaleItem, SalaryPayment, Stock,
+    AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Employee, Notification,
+    Organization, Product, Purchase, PurchaseItem, Sale, SaleItem, SalaryPayment, Stock,
     StockMovement, Warehouse,
 )
 from .views import (
-    PayDebtView, PaySalaryView, PostPurchaseView, PostSaleView, UnpostPurchaseView,
-    UnpostSaleView,
+    NotificationListView, PayDebtView, PaySalaryView, PostPurchaseView, PostSaleView,
+    ReadAllNotificationsView, ReadNotificationView, UnpostPurchaseView, UnpostSaleView,
+    UnreadNotificationListView, notify_roles,
 )
 
 
@@ -367,3 +368,84 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(self.account.balance, 200)
         self.assertFalse(CashTransaction.objects.exists())
         self.assertFalse(AuditLog.objects.exists())
+
+    def test_notify_roles_creates_notifications_for_active_matching_users(self):
+        matching_user = get_user_model().objects.create_user(
+            username='director', role='DIRECTOR'
+        )
+        get_user_model().objects.create_user(
+            username='inactive', role='ADMIN', is_active=False
+        )
+        get_user_model().objects.create_user(username='employee', role='EMPLOYEE')
+
+        notify_roles(
+            ['ADMIN', 'DIRECTOR'],
+            'Payment received',
+            'A customer paid an invoice',
+            'SALE',
+        )
+
+        self.assertEqual(Notification.objects.count(), 2)
+        self.assertSetEqual(
+            set(Notification.objects.values_list('user_id', flat=True)),
+            {self.user.pk, matching_user.pk},
+        )
+        notification = Notification.objects.get(user=matching_user)
+        self.assertEqual(notification.notification_type, 'SALE')
+        self.assertEqual(notification.title, 'Payment received')
+        self.assertFalse(notification.is_read)
+
+    def test_notification_views_only_access_current_user_notifications(self):
+        other_user = get_user_model().objects.create_user(username='other')
+        older = Notification.objects.create(
+            user=self.user, title='Older', message='First', is_read=True
+        )
+        newer = Notification.objects.create(
+            user=self.user, title='Newer', message='Second'
+        )
+        other = Notification.objects.create(
+            user=other_user, title='Private', message='Other user'
+        )
+
+        request = self.factory.get('/')
+        force_authenticate(request, user=self.user)
+        response = NotificationListView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(
+            [item['id'] for item in response.data['results']],
+            [newer.pk, older.pk],
+        )
+
+        request = self.factory.get('/')
+        force_authenticate(request, user=self.user)
+        response = UnreadNotificationListView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], newer.pk)
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = ReadNotificationView.as_view()(request, pk=other.pk)
+        self.assertEqual(response.status_code, 404)
+        other.refresh_from_db()
+        self.assertFalse(other.is_read)
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = ReadNotificationView.as_view()(request, pk=newer.pk)
+        self.assertEqual(response.status_code, 200)
+        newer.refresh_from_db()
+        self.assertTrue(newer.is_read)
+
+        extra = Notification.objects.create(
+            user=self.user, title='Extra', message='Unread'
+        )
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = ReadAllNotificationsView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        extra.refresh_from_db()
+        other.refresh_from_db()
+        self.assertTrue(extra.is_read)
+        self.assertFalse(other.is_read)

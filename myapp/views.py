@@ -10,16 +10,19 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+
+from accounts.models import User
+
 from .models import (SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Organization,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,Counterparty,ContactPerson,Category,Unit,Brand,
     Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,SaleItem,StockTransfer,StockTransferItem,
-    WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,
+    WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,Notification,
 )
 from .serializers import (
     SaleReturnSerializer,SaleReturnItemSerializer,PurchaseReturnSerializer,PurchaseReturnItemSerializer,
     OrganizationSerializer,BranchSerializer,OrganizationMemberSerializer,DepartmentSerializer,PositionSerializer,EmployeeSerializer,SalaryPaymentSerializer,
     CounterpartySerializer,ContactPersonSerializer,CategorySerializer,UnitSerializer,BrandSerializer,ProductSerializer,PriceTypeSerializer,ProductPriceSerializer,WarehouseSerializer,
     StockSerializer,StockMovementSerializer,PurchaseSerializer,PurchaseItemSerializer,SaleSerializer,SaleItemSerializer,StockTransferSerializer,StockTransferItemSerializer,
-    WriteOffSerializer,WriteOffItemSerializer,InventorySerializer,InventoryItemSerializer,CashAccountSerializer,FinanceCategorySerializer,CashTransactionSerializer,MoneyTransferSerializer,DebtSerializer,AuditLogSerializer,
+    WriteOffSerializer,WriteOffItemSerializer,InventorySerializer,InventoryItemSerializer,CashAccountSerializer,FinanceCategorySerializer,CashTransactionSerializer,MoneyTransferSerializer,DebtSerializer,AuditLogSerializer,NotificationSerializer,
 )
 
 from .permissions import (IsAdminOrDirector,IsAccountant,IsWarehouseWorker,IsSalesWorker,IsPurchaseWorker,IsHRWorker,IsAuditor,)
@@ -38,6 +41,17 @@ def create_audit(request, action, obj, description):
         description=description,
         ip_address=request.META.get('REMOTE_ADDR'),
     )
+
+
+def notify_roles(roles, title, message, notification_type='INFO'):
+    users = User.objects.filter(role__in=roles, is_active=True)
+    for user in users:
+        Notification.objects.create(
+            user=user,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+        )
 
 
 def calculate_payment_status(total_amount, paid_amount):
@@ -1623,6 +1637,56 @@ class PayDebtView(APIView):
             'status': debt.status,
             'cash_balance': account.balance,
         })
+
+
+# =========================================================
+# NOTIFICATIONS
+# =========================================================
+
+class NotificationListView(ListAPIView):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(
+            user=self.request.user
+        ).order_by('-created_at')
+
+
+class UnreadNotificationListView(ListAPIView):
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Notification.objects.filter(
+            user=self.request.user,
+            is_read=False,
+        ).order_by('-created_at')
+
+
+class ReadNotificationView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        notification = get_object_or_404(
+            Notification,
+            pk=pk,
+            user=request.user,
+        )
+        notification.is_read = True
+        notification.save()
+        return Response({'message': 'Уведомление прочитано'})
+
+
+class ReadAllNotificationsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        Notification.objects.filter(
+            user=request.user,
+            is_read=False,
+        ).update(is_read=True)
+        return Response({'message': 'Все уведомления прочитаны'})
 
 
 # =========================================================

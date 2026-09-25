@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import (Organization, SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,
     Counterparty,ContactPerson,Category,Unit,Brand,Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,
-    SaleItem,StockTransfer,StockTransferItem,WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,
+    SaleItem,StockTransfer,StockTransferItem,WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,Notification,
 )
 
 
@@ -207,6 +207,14 @@ class AuditLogSerializer(serializers.ModelSerializer):
     class Meta:
         model = AuditLog
         fields = '__all__'
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = '__all__'
+        read_only_fields = ['user', 'created_at']
+
 
 class SaleReturnSerializer(serializers.ModelSerializer):
     class Meta:
