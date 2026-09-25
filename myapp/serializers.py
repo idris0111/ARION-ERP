@@ -118,11 +118,34 @@ class PurchaseSerializer(serializers.ModelSerializer):
         model = Purchase
         fields = '__all__'
 
+    def validate_paid_amount(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Оплата не может быть отрицательной')
+        return value
+
 
 class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = '__all__'
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Цена не может быть отрицательной')
+        return value
+
+    def validate(self, data):
+        purchase = data.get('purchase')
+        if purchase is None and self.instance is not None:
+            purchase = self.instance.purchase
+        if purchase and purchase.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённую закупку')
+        return data
 
 
 class SaleSerializer(serializers.ModelSerializer):
@@ -130,11 +153,34 @@ class SaleSerializer(serializers.ModelSerializer):
         model = Sale
         fields = '__all__'
 
+    def validate_paid_amount(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Оплата не может быть отрицательной')
+        return value
+
 
 class SaleItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleItem
         fields = '__all__'
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Цена не может быть отрицательной')
+        return value
+
+    def validate(self, data):
+        sale = data.get('sale')
+        if sale is None and self.instance is not None:
+            sale = self.instance.sale
+        if sale and sale.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённую продажу')
+        return data
 
 
 class StockTransferSerializer(serializers.ModelSerializer):
@@ -142,11 +188,34 @@ class StockTransferSerializer(serializers.ModelSerializer):
         model = StockTransfer
         fields = '__all__'
 
+    def validate(self, data):
+        from_warehouse = data.get('from_warehouse')
+        to_warehouse = data.get('to_warehouse')
+        if self.instance is not None:
+            from_warehouse = from_warehouse or self.instance.from_warehouse
+            to_warehouse = to_warehouse or self.instance.to_warehouse
+        if from_warehouse == to_warehouse:
+            raise serializers.ValidationError('Склады должны быть разными')
+        return data
+
 
 class StockTransferItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransferItem
         fields = '__all__'
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate(self, data):
+        transfer = data.get('transfer')
+        if transfer is None and self.instance is not None:
+            transfer = self.instance.transfer
+        if transfer and transfer.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённое перемещение')
+        return data
 
 
 class WriteOffSerializer(serializers.ModelSerializer):
@@ -159,6 +228,19 @@ class WriteOffItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = WriteOffItem
         fields = '__all__'
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate(self, data):
+        write_off = data.get('write_off')
+        if write_off is None and self.instance is not None:
+            write_off = self.instance.write_off
+        if write_off and write_off.status == 'POSTED':
+            raise serializers.ValidationError('Нельзя менять проведённое списание')
+        return data
 
 
 class InventorySerializer(serializers.ModelSerializer):
@@ -226,6 +308,16 @@ class SaleReturnItemSerializer(serializers.ModelSerializer):
         model = SaleReturnItem
         fields = '__all__'
 
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Цена не может быть отрицательной')
+        return value
+
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseReturn
@@ -235,3 +327,13 @@ class PurchaseReturnItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseReturnItem
         fields = '__all__'
+
+    def validate_quantity(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Количество должно быть больше 0')
+        return value
+
+    def validate_price(self, value):
+        if value < 0:
+            raise serializers.ValidationError('Цена не может быть отрицательной')
+        return value

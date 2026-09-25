@@ -54,6 +54,26 @@ def notify_roles(roles, title, message, notification_type='INFO'):
         )
 
 
+class PostedDocumentProtectMixin:
+    def update(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.status == 'POSTED':
+            return Response(
+                {'error': 'Нельзя изменять проведённый документ'},
+                status=400,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.status == 'POSTED':
+            return Response(
+                {'error': 'Нельзя удалить проведённый документ'},
+                status=400,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
 def calculate_payment_status(total_amount, paid_amount):
     if paid_amount <= 0:
         return 'UNPAID'
@@ -437,7 +457,7 @@ class PurchaseListCreateView(ListCreateAPIView):
     search_fields = ['number']
     ordering_fields = ['created_at', 'total_amount']
 
-class PurchaseDetailView(RetrieveUpdateDestroyAPIView):
+class PurchaseDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = Purchase.objects.all()
     serializer_class = PurchaseSerializer
     permission_classes = [IsPurchaseWorker]
@@ -639,7 +659,7 @@ class SaleListCreateView(ListCreateAPIView):
     search_fields = ['number']
     ordering_fields = ['created_at', 'total_amount']
 
-class SaleDetailView(RetrieveUpdateDestroyAPIView):
+class SaleDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = Sale.objects.all()
     serializer_class = SaleSerializer
     permission_classes = [IsSalesWorker]
@@ -842,7 +862,7 @@ class StockTransferListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class StockTransferDetailView(RetrieveUpdateDestroyAPIView):
+class StockTransferDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = StockTransfer.objects.all()
     serializer_class = StockTransferSerializer
     permission_classes = [IsWarehouseWorker]
@@ -1057,7 +1077,7 @@ class WriteOffListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class WriteOffDetailView(RetrieveUpdateDestroyAPIView):
+class WriteOffDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = WriteOff.objects.all()
     serializer_class = WriteOffSerializer
     permission_classes = [IsWarehouseWorker]
@@ -1219,7 +1239,7 @@ class InventoryListCreateView(ListCreateAPIView):
     permission_classes = [IsWarehouseWorker]
 
 
-class InventoryDetailView(RetrieveUpdateDestroyAPIView):
+class InventoryDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
     permission_classes = [IsWarehouseWorker]
@@ -1756,7 +1776,7 @@ class SaleReturnListCreateView(ListCreateAPIView):
     serializer_class = SaleReturnSerializer
     permission_classes = [IsSalesWorker]
 
-class SaleReturnDetailView(RetrieveUpdateDestroyAPIView):
+class SaleReturnDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = SaleReturn.objects.all()
     serializer_class = SaleReturnSerializer
     permission_classes = [IsSalesWorker]
@@ -1771,7 +1791,7 @@ class PurchaseReturnListCreateView(ListCreateAPIView):
     serializer_class = PurchaseReturnSerializer
     permission_classes = [IsPurchaseWorker]
 
-class PurchaseReturnDetailView(RetrieveUpdateDestroyAPIView):
+class PurchaseReturnDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
     queryset = PurchaseReturn.objects.all()
     serializer_class = PurchaseReturnSerializer
     permission_classes = [IsPurchaseWorker]

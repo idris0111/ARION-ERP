@@ -8,13 +8,23 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from .models import (
     AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Employee, Notification,
-    Organization, Product, Purchase, PurchaseItem, Sale, SaleItem, SalaryPayment, Stock,
-    StockMovement, Warehouse,
+    Inventory, Organization, Product, Purchase, PurchaseItem, PurchaseReturn,
+    PurchaseReturnItem, Sale, SaleItem, SaleReturn, SaleReturnItem, SalaryPayment,
+    Stock, StockMovement, StockTransfer, StockTransferItem, Warehouse, WriteOff,
+    WriteOffItem,
+)
+from .serializers import (
+    PurchaseItemSerializer, PurchaseReturnItemSerializer, PurchaseSerializer,
+    SaleItemSerializer, SaleReturnItemSerializer, SaleSerializer,
+    StockTransferItemSerializer, StockTransferSerializer, WriteOffItemSerializer,
 )
 from .views import (
     CheckLowStockView, NotificationListView, PayDebtView, PaySalaryView,
-    PostPurchaseView, PostSaleView, ReadAllNotificationsView, ReadNotificationView,
-    UnpostPurchaseView, UnpostSaleView, UnreadNotificationListView, notify_roles,
+    InventoryDetailView, PostPurchaseView, PostSaleView, PurchaseDetailView,
+    PurchaseReturnDetailView, ReadAllNotificationsView, ReadNotificationView,
+    SaleDetailView, SaleReturnDetailView, StockDetailView, StockListView,
+    StockTransferDetailView, UnpostPurchaseView, UnpostSaleView,
+    UnreadNotificationListView, WriteOffDetailView, notify_roles,
 )
 
 
