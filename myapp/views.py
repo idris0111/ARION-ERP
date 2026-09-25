@@ -1,8 +1,9 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework.generics import (ListCreateAPIView,RetrieveUpdateDestroyAPIView,RetrieveAPIView,ListAPIView,)
 from rest_framework.views import APIView
@@ -1500,63 +1501,78 @@ class PayDebtView(APIView):
 
     def post(self, request, pk):
         debt = get_object_or_404(Debt, pk=pk)
-
         amount = request.data.get('amount')
+        cash_account_id = request.data.get('cash_account')
 
-        if not amount:
-            return Response(
-                {'error': 'Укажите amount'},
-                status=400
-            )
+        if not amount or not cash_account_id:
+            return Response({'error': 'Укажите amount и cash_account'}, status=400)
 
         try:
             amount = Decimal(str(amount))
-        except:
-            return Response(
-                {'error': 'Неверная сумма'},
-                status=400
-            )
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'error': 'Неверная сумма'}, status=400)
+
+        if not amount.is_finite():
+            return Response({'error': 'Неверная сумма'}, status=400)
 
         if amount <= 0:
-            return Response(
-                {'error': 'Сумма должна быть больше нуля'},
-                status=400
-            )
+            return Response({'error': 'Сумма должна быть больше 0'}, status=400)
 
         remaining = debt.amount - debt.paid_amount
-
         if amount > remaining:
-            return Response(
-                {
-                    'error':
-                    f'Сумма больше остатка долга. '
-                    f'Остаток: {remaining}'
-                },
-                status=400
+            return Response({'error': f'Остаток долга {remaining}'}, status=400)
+
+        with transaction.atomic():
+            debt = Debt.objects.select_for_update().get(pk=debt.pk)
+            remaining = debt.amount - debt.paid_amount
+            if amount > remaining:
+                return Response({'error': f'Остаток долга {remaining}'}, status=400)
+
+            account = get_object_or_404(
+                CashAccount.objects.select_for_update(),
+                pk=cash_account_id,
             )
 
-        debt.paid_amount += amount
+            if debt.debt_type == 'CUSTOMER':
+                account.balance += amount
+                transaction_type = 'INCOME'
+            elif debt.debt_type == 'SUPPLIER':
+                if account.balance < amount:
+                    return Response({'error': 'Недостаточно денег в кассе'}, status=400)
+                account.balance -= amount
+                transaction_type = 'EXPENSE'
+            else:
+                return Response({'error': 'Неверный тип долга'}, status=400)
 
-        if debt.paid_amount == debt.amount:
-            debt.status = 'PAID'
-        else:
-            debt.status = 'PARTIAL'
+            account.save()
+            CashTransaction.objects.create(
+                organization=debt.organization,
+                account=account,
+                counterparty=debt.counterparty,
+                number=f'DEBT-{uuid4().hex}',
+                date=timezone.now(),
+                created_by=request.user,
+                transaction_type=transaction_type,
+                amount=amount,
+                status='POSTED',
+            )
 
-        debt.save()
+            debt.paid_amount += amount
+            if debt.paid_amount >= debt.amount:
+                debt.status = 'PAID'
+            else:
+                debt.status = 'PARTIAL'
+            debt.save()
 
-        create_audit(
-            request,
-            'UPDATE',
-            debt,
-            f'Оплата долга на сумму {amount}'
-        )
+            create_audit(request, 'UPDATE', debt, f'Оплата долга {amount}')
 
         return Response({
-            'message': 'Оплата долга сохранена',
+            'message': 'Долг оплачен',
             'amount': debt.amount,
             'paid_amount': debt.paid_amount,
             'remaining': debt.amount - debt.paid_amount,
             'status': debt.status,
+            'cash_balance': account.balance,
         })
 
 

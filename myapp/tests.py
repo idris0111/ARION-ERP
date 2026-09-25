@@ -9,7 +9,9 @@ from .models import (
     AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Organization,
     Product, Purchase, PurchaseItem, Sale, SaleItem, Stock, StockMovement, Warehouse,
 )
-from .views import PostPurchaseView, PostSaleView, UnpostPurchaseView, UnpostSaleView
+from .views import (
+    PayDebtView, PostPurchaseView, PostSaleView, UnpostPurchaseView, UnpostSaleView,
+)
 
 
 class DocumentPaymentTests(TestCase):
@@ -56,6 +58,25 @@ class DocumentPaymentTests(TestCase):
         request = self.factory.post('/')
         force_authenticate(request, user=self.user)
         return views[kind, action].as_view()(request, pk=document.pk)
+
+    def pay_debt(self, debt, amount=None, cash_account=None):
+        data = {}
+        if amount is not None:
+            data['amount'] = amount
+        if cash_account is not None:
+            data['cash_account'] = cash_account.pk
+        request = self.factory.post('/', data, format='json')
+        force_authenticate(request, user=self.user)
+        return PayDebtView.as_view()(request, pk=debt.pk)
+
+    def make_debt(self, debt_type, amount=100):
+        return Debt.objects.create(
+            organization=self.organization,
+            counterparty=self.counterparty,
+            debt_type=debt_type,
+            amount=amount,
+            status='OPEN',
+        )
 
     def assert_failed_post_unchanged(self, document):
         document.refresh_from_db()
@@ -191,3 +212,81 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(Debt.objects.get().pk, debt_id)
         self.assertEqual(StockMovement.objects.get().pk, movement_id)
         self.assertFalse(AuditLog.objects.filter(action='CANCEL').exists())
+
+    def test_customer_debt_payment_moves_money_and_updates_debt(self):
+        debt = self.make_debt('CUSTOMER')
+
+        response = self.pay_debt(debt, 40, self.account)
+        self.assertEqual(response.status_code, 200, response.data)
+        debt.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(debt.paid_amount, 40)
+        self.assertEqual(debt.status, 'PARTIAL')
+        self.assertEqual(self.account.balance, 240)
+        self.assertEqual(response.data['remaining'], Decimal('60'))
+        payment = CashTransaction.objects.get()
+        self.assertEqual(payment.transaction_type, 'INCOME')
+        self.assertEqual(payment.amount, 40)
+        self.assertEqual(payment.organization, self.organization)
+        self.assertEqual(payment.counterparty, self.counterparty)
+        self.assertEqual(payment.created_by, self.user)
+        payment.full_clean()
+
+        response = self.pay_debt(debt, 60, self.account)
+        self.assertEqual(response.status_code, 200, response.data)
+        debt.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(debt.paid_amount, 100)
+        self.assertEqual(debt.status, 'PAID')
+        self.assertEqual(self.account.balance, 300)
+        self.assertEqual(CashTransaction.objects.count(), 2)
+        self.assertEqual(AuditLog.objects.filter(action='UPDATE').count(), 2)
+
+    def test_supplier_debt_payment_moves_money(self):
+        debt = self.make_debt('SUPPLIER')
+        response = self.pay_debt(debt, 100, self.account)
+        self.assertEqual(response.status_code, 200, response.data)
+        debt.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(debt.status, 'PAID')
+        self.assertEqual(self.account.balance, 100)
+        payment = CashTransaction.objects.get()
+        self.assertEqual(payment.transaction_type, 'EXPENSE')
+        self.assertEqual(payment.amount, 100)
+
+    def test_supplier_debt_insufficient_balance_changes_nothing(self):
+        debt = self.make_debt('SUPPLIER', amount=300)
+        response = self.pay_debt(debt, 300, self.account)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('Недостаточно денег', str(response.data))
+        debt.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(debt.paid_amount, 0)
+        self.assertEqual(debt.status, 'OPEN')
+        self.assertEqual(self.account.balance, 200)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertFalse(AuditLog.objects.exists())
+
+    def test_debt_payment_validation(self):
+        debt = self.make_debt('CUSTOMER')
+        cases = [
+            ({}, 'Укажите amount и cash_account'),
+            ({'amount': 'abc', 'cash_account': self.account.pk}, 'Неверная сумма'),
+            ({'amount': 'NaN', 'cash_account': self.account.pk}, 'Неверная сумма'),
+            ({'amount': 0, 'cash_account': self.account.pk}, 'Укажите amount и cash_account'),
+            ({'amount': -1, 'cash_account': self.account.pk}, 'Сумма должна быть больше 0'),
+            ({'amount': 101, 'cash_account': self.account.pk}, 'Остаток долга 100.00'),
+        ]
+        for data, error in cases:
+            with self.subTest(data=data):
+                request = self.factory.post('/', data, format='json')
+                force_authenticate(request, user=self.user)
+                response = PayDebtView.as_view()(request, pk=debt.pk)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.data['error'], error)
+
+        debt.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(debt.paid_amount, 0)
+        self.assertEqual(self.account.balance, 200)
+        self.assertFalse(CashTransaction.objects.exists())
