@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import *
 from .reports import *
+from .exports import *
 
 urlpatterns = [
     path('organizations/', OrganizationListCreateView.as_view()),
@@ -126,4 +127,9 @@ urlpatterns = [
     path('reports/product-profit/',ProductProfitReportView.as_view()),
     path('reports/daily-profit/',DailyProfitReportView.as_view()),
     path('reports/monthly-profit/',MonthlyProfitReportView.as_view()),
+    path('export/products/',ExportProductsView.as_view()),
+    path('export/stocks/',ExportStocksView.as_view()),
+    path('export/sales/',ExportSalesView.as_view()),
+    path('export/purchases/',ExportPurchasesView.as_view()),
+    path('export/debts/',ExportDebtsView.as_view()),
 ]
