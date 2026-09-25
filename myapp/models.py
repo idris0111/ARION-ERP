@@ -99,9 +99,15 @@ class Employee(models.Model):
 
 class SalaryPayment(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='salary_payments')
+    cash_account = models.ForeignKey('CashAccount', on_delete=models.PROTECT, null=True, blank=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     month = models.DateField()
     comment = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=[('DRAFT', 'Draft'), ('PAID', 'Paid')],
+        default='DRAFT',
+    )
     paid_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

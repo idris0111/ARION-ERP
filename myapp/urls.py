@@ -18,6 +18,7 @@ urlpatterns = [
     path('employees/<int:pk>/', EmployeeDetailView.as_view()),
     path('salary-payments/', SalaryPaymentListCreateView.as_view()),
     path('salary-payments/<int:pk>/', SalaryPaymentDetailView.as_view()),
+    path('salary-payments/<int:pk>/pay/', PaySalaryView.as_view()),
 
     path('counterparties/', CounterpartyListCreateView.as_view()),
     path('counterparties/<int:pk>/', CounterpartyDetailView.as_view()),

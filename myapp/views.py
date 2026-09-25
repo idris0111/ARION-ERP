@@ -217,6 +217,55 @@ class SalaryPaymentDetailView(RetrieveUpdateDestroyAPIView):
     permission_classes = [IsHRWorker]
 
 
+class PaySalaryView(APIView):
+    permission_classes = [IsHRWorker]
+
+    def post(self, request, pk):
+        salary = get_object_or_404(SalaryPayment, pk=pk)
+        if salary.status == 'PAID':
+            return Response({'error': 'Зарплата уже выплачена'}, status=400)
+        if not salary.cash_account_id:
+            return Response({'error': 'Выберите кассу'}, status=400)
+
+        with transaction.atomic():
+            salary = SalaryPayment.objects.select_for_update().get(pk=salary.pk)
+            if salary.status == 'PAID':
+                return Response({'error': 'Зарплата уже выплачена'}, status=400)
+
+            account = CashAccount.objects.select_for_update().get(
+                pk=salary.cash_account_id
+            )
+            if account.balance < salary.amount:
+                return Response({'error': 'Недостаточно денег в кассе'}, status=400)
+
+            account.balance -= salary.amount
+            account.save()
+            CashTransaction.objects.create(
+                organization=salary.employee.organization,
+                account=account,
+                number=f'SALARY-{uuid4().hex}',
+                date=timezone.now(),
+                created_by=request.user,
+                transaction_type='EXPENSE',
+                amount=salary.amount,
+                status='POSTED',
+            )
+            salary.status = 'PAID'
+            salary.save()
+            create_audit(
+                request,
+                'POST',
+                salary,
+                f'Выплачена зарплата {salary.employee}',
+            )
+
+        return Response({
+            'message': 'Зарплата выплачена',
+            'amount': salary.amount,
+            'cash_balance': account.balance,
+        })
+
+
 # =========================================================
 # COUNTERPARTIES
 # =========================================================

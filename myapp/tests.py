@@ -6,11 +6,13 @@ from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from .models import (
-    AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Organization,
-    Product, Purchase, PurchaseItem, Sale, SaleItem, Stock, StockMovement, Warehouse,
+    AuditLog, CashAccount, CashTransaction, Counterparty, Debt, Employee, Organization,
+    Product, Purchase, PurchaseItem, Sale, SaleItem, SalaryPayment, Stock,
+    StockMovement, Warehouse,
 )
 from .views import (
-    PayDebtView, PostPurchaseView, PostSaleView, UnpostPurchaseView, UnpostSaleView,
+    PayDebtView, PaySalaryView, PostPurchaseView, PostSaleView, UnpostPurchaseView,
+    UnpostSaleView,
 )
 
 
@@ -77,6 +79,25 @@ class DocumentPaymentTests(TestCase):
             amount=amount,
             status='OPEN',
         )
+
+    def make_salary(self, amount=100, with_account=True):
+        employee = Employee.objects.create(
+            organization=self.organization,
+            first_name='Test',
+            last_name='Employee',
+            hire_date=timezone.localdate(),
+        )
+        return SalaryPayment.objects.create(
+            employee=employee,
+            cash_account=self.account if with_account else None,
+            amount=amount,
+            month=timezone.localdate().replace(day=1),
+        )
+
+    def pay_salary(self, salary):
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        return PaySalaryView.as_view()(request, pk=salary.pk)
 
     def assert_failed_post_unchanged(self, document):
         document.refresh_from_db()
@@ -290,3 +311,59 @@ class DocumentPaymentTests(TestCase):
         self.assertEqual(debt.paid_amount, 0)
         self.assertEqual(self.account.balance, 200)
         self.assertFalse(CashTransaction.objects.exists())
+
+    def test_salary_payment_moves_money_and_marks_paid(self):
+        salary = self.make_salary(50)
+        response = self.pay_salary(salary)
+
+        self.assertEqual(response.status_code, 200, response.data)
+        salary.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(salary.status, 'PAID')
+        self.assertEqual(self.account.balance, 150)
+        self.assertEqual(response.data['cash_balance'], Decimal('150'))
+        payment = CashTransaction.objects.get()
+        self.assertEqual(payment.organization, self.organization)
+        self.assertEqual(payment.account, self.account)
+        self.assertEqual(payment.transaction_type, 'EXPENSE')
+        self.assertEqual(payment.amount, 50)
+        self.assertEqual(payment.status, 'POSTED')
+        self.assertEqual(payment.created_by, self.user)
+        self.assertTrue(payment.number.startswith('SALARY-'))
+        payment.full_clean()
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action='POST', model_name='SalaryPayment', object_id=salary.pk
+            ).exists()
+        )
+
+        response = self.pay_salary(salary)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'Зарплата уже выплачена')
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.balance, 150)
+        self.assertEqual(CashTransaction.objects.count(), 1)
+
+    def test_salary_payment_requires_cash_account(self):
+        salary = self.make_salary(50, with_account=False)
+        response = self.pay_salary(salary)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'Выберите кассу')
+        salary.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(salary.status, 'DRAFT')
+        self.assertEqual(self.account.balance, 200)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertFalse(AuditLog.objects.exists())
+
+    def test_salary_payment_insufficient_balance_changes_nothing(self):
+        salary = self.make_salary(250)
+        response = self.pay_salary(salary)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error'], 'Недостаточно денег в кассе')
+        salary.refresh_from_db()
+        self.account.refresh_from_db()
+        self.assertEqual(salary.status, 'DRAFT')
+        self.assertEqual(self.account.balance, 200)
+        self.assertFalse(CashTransaction.objects.exists())
+        self.assertFalse(AuditLog.objects.exists())
