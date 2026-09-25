@@ -1714,6 +1714,27 @@ class ReadAllNotificationsView(APIView):
         return Response({'message': 'Все уведомления прочитаны'})
 
 
+class CheckLowStockView(APIView):
+    permission_classes = [IsWarehouseWorker]
+
+    def post(self, request):
+        stocks = Stock.objects.select_related('product', 'warehouse')
+        count = 0
+        for stock in stocks:
+            if stock.quantity <= stock.product.min_stock:
+                notify_roles(
+                    ['ADMIN', 'DIRECTOR', 'WAREHOUSE_MANAGER', 'STOREKEEPER'],
+                    'Заканчивается товар',
+                    f'{stock.product} — остаток {stock.quantity} на складе {stock.warehouse}',
+                    'STOCK',
+                )
+                count += 1
+        return Response({
+            'message': 'Проверка завершена',
+            'low_stock_count': count,
+        })
+
+
 # =========================================================
 # AUDIT LOG
 # =========================================================

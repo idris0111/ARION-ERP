@@ -99,6 +99,7 @@ urlpatterns = [
     path('notifications/unread/', UnreadNotificationListView.as_view()),
     path('notifications/<int:pk>/read/', ReadNotificationView.as_view()),
     path('notifications/read-all/', ReadAllNotificationsView.as_view()),
+    path('notifications/check-low-stock/', CheckLowStockView.as_view()),
 
     path('audit-logs/', AuditLogListView.as_view()),
     path('audit-logs/<int:pk>/', AuditLogDetailView.as_view()),

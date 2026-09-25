@@ -12,9 +12,9 @@ from .models import (
     StockMovement, Warehouse,
 )
 from .views import (
-    NotificationListView, PayDebtView, PaySalaryView, PostPurchaseView, PostSaleView,
-    ReadAllNotificationsView, ReadNotificationView, UnpostPurchaseView, UnpostSaleView,
-    UnreadNotificationListView, notify_roles,
+    CheckLowStockView, NotificationListView, PayDebtView, PaySalaryView,
+    PostPurchaseView, PostSaleView, ReadAllNotificationsView, ReadNotificationView,
+    UnpostPurchaseView, UnpostSaleView, UnreadNotificationListView, notify_roles,
 )
 
 
@@ -471,7 +471,36 @@ class DocumentPaymentTests(TestCase):
             '/api/notifications/unread/': UnreadNotificationListView,
             '/api/notifications/1/read/': ReadNotificationView,
             '/api/notifications/read-all/': ReadAllNotificationsView,
+            '/api/notifications/check-low-stock/': CheckLowStockView,
         }
         for path, view_class in routes.items():
             with self.subTest(path=path):
                 self.assertIs(resolve(path).func.view_class, view_class)
+
+    def test_check_low_stock_notifies_roles_at_or_below_minimum(self):
+        self.product.min_stock = 10
+        self.product.save()
+
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = CheckLowStockView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['low_stock_count'], 1)
+        notification = Notification.objects.get(
+            user=self.user,
+            notification_type='STOCK',
+        )
+        self.assertEqual(notification.title, 'Заканчивается товар')
+        self.assertIn(str(self.product), notification.message)
+        self.assertIn(str(self.stock.quantity), notification.message)
+        self.assertIn(str(self.warehouse), notification.message)
+
+        Notification.objects.all().delete()
+        self.stock.quantity = 11
+        self.stock.save()
+        request = self.factory.post('/')
+        force_authenticate(request, user=self.user)
+        response = CheckLowStockView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['low_stock_count'], 0)
+        self.assertFalse(Notification.objects.exists())
