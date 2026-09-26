@@ -1,125 +1,155 @@
+from django.db.models import Model
+from django.utils import timezone
 from rest_framework import serializers
 from .models import (Organization, SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,
     Counterparty,ContactPerson,Category,Unit,Brand,Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,
     SaleItem,StockTransfer,StockTransferItem,WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,Notification,
+    StockReservation,DebtPayment,Account,JournalEntry,JournalEntryLine,DealStage,Lead,Deal,CRMTask,CRMActivity,
 )
+from .tenancy import ensure_organization_access,get_object_organization_id
 
 
-class OrganizationSerializer(serializers.ModelSerializer):
+class OrganizationModelSerializer(serializers.ModelSerializer):
+    def run_validation(self,data=serializers.empty):
+        validated = super().run_validation(data)
+        request = self.context.get('request')
+        if request:
+            objects = [value for value in validated.values() if isinstance(value,Model)]
+            if self.instance is not None:
+                objects.append(self.instance)
+            ensure_organization_access(request.user,*objects)
+            organization_ids = {get_object_organization_id(obj) for obj in objects if get_object_organization_id(obj) is not None}
+            if len(organization_ids) > 1:
+                raise serializers.ValidationError('Связанные объекты относятся к разным организациям')
+        return validated
+
+
+class OrganizationSerializer(OrganizationModelSerializer):
     class Meta:
         model = Organization
         fields = '__all__'
 
 
-class BranchSerializer(serializers.ModelSerializer):
+class BranchSerializer(OrganizationModelSerializer):
     class Meta:
         model = Branch
         fields = '__all__'
 
 
-class OrganizationMemberSerializer(serializers.ModelSerializer):
+class OrganizationMemberSerializer(OrganizationModelSerializer):
     class Meta:
         model = OrganizationMember
         fields = '__all__'
 
 
-class DepartmentSerializer(serializers.ModelSerializer):
+class DepartmentSerializer(OrganizationModelSerializer):
     class Meta:
         model = Department
         fields = '__all__'
 
 
-class PositionSerializer(serializers.ModelSerializer):
+class PositionSerializer(OrganizationModelSerializer):
     class Meta:
         model = Position
         fields = '__all__'
 
 
-class EmployeeSerializer(serializers.ModelSerializer):
+class EmployeeSerializer(OrganizationModelSerializer):
     class Meta:
         model = Employee
         fields = '__all__'
 
 
-class SalaryPaymentSerializer(serializers.ModelSerializer):
+class SalaryPaymentSerializer(OrganizationModelSerializer):
     class Meta:
         model = SalaryPayment
         fields = '__all__'
-        read_only_fields = ['status', 'paid_at']
+        read_only_fields = ['status','paid_at','amount']
 
-    def validate_amount(self, value):
-        if value <= 0:
-            raise serializers.ValidationError('Сумма должна быть больше 0')
-        return value
+    def validate(self,data):
+        employee = data.get('employee') or getattr(self.instance,'employee',None)
+        base_salary = data.get('base_salary',getattr(self.instance,'base_salary',0))
+        bonus = data.get('bonus',getattr(self.instance,'bonus',0))
+        deduction = data.get('deduction',getattr(self.instance,'deduction',0))
+        if not base_salary and employee:
+            base_salary = employee.salary
+            data['base_salary'] = base_salary
+        data['amount'] = base_salary+bonus-deduction
+        if data['amount'] <= 0:
+            raise serializers.ValidationError('???????? ???????? ?????? ???? ?????? 0')
+        return data
 
 
-class CounterpartySerializer(serializers.ModelSerializer):
+class CounterpartySerializer(OrganizationModelSerializer):
     class Meta:
         model = Counterparty
         fields = '__all__'
 
 
-class ContactPersonSerializer(serializers.ModelSerializer):
+class ContactPersonSerializer(OrganizationModelSerializer):
     class Meta:
         model = ContactPerson
         fields = '__all__'
 
 
-class CategorySerializer(serializers.ModelSerializer):
+class CategorySerializer(OrganizationModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
 
 
-class UnitSerializer(serializers.ModelSerializer):
+class UnitSerializer(OrganizationModelSerializer):
     class Meta:
         model = Unit
         fields = '__all__'
 
 
-class BrandSerializer(serializers.ModelSerializer):
+class BrandSerializer(OrganizationModelSerializer):
     class Meta:
         model = Brand
         fields = '__all__'
 
 
-class ProductSerializer(serializers.ModelSerializer):
+class ProductSerializer(OrganizationModelSerializer):
     class Meta:
         model = Product
         fields = '__all__'
 
 
-class PriceTypeSerializer(serializers.ModelSerializer):
+class PriceTypeSerializer(OrganizationModelSerializer):
     class Meta:
         model = PriceType
         fields = '__all__'
 
 
-class ProductPriceSerializer(serializers.ModelSerializer):
+class ProductPriceSerializer(OrganizationModelSerializer):
     class Meta:
         model = ProductPrice
         fields = '__all__'
 
 
-class WarehouseSerializer(serializers.ModelSerializer):
+class WarehouseSerializer(OrganizationModelSerializer):
     class Meta:
         model = Warehouse
         fields = '__all__'
 
 
-class StockSerializer(serializers.ModelSerializer):
+class StockSerializer(OrganizationModelSerializer):
+    available_quantity = serializers.DecimalField(max_digits=14,decimal_places=3,read_only=True)
+
     class Meta:
         model = Stock
         fields = '__all__'
+        read_only_fields = ['quantity','reserved_quantity','average_cost']
 
 
-class StockMovementSerializer(serializers.ModelSerializer):
+class StockMovementSerializer(OrganizationModelSerializer):
     class Meta:
         model = StockMovement
         fields = '__all__'
 
 
-class PurchaseSerializer(serializers.ModelSerializer):
+class PurchaseSerializer(OrganizationModelSerializer):
     class Meta:
         model = Purchase
         fields = '__all__'
@@ -131,7 +161,7 @@ class PurchaseSerializer(serializers.ModelSerializer):
         return value
 
 
-class PurchaseItemSerializer(serializers.ModelSerializer):
+class PurchaseItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = '__all__'
@@ -156,7 +186,7 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         return data
 
 
-class SaleSerializer(serializers.ModelSerializer):
+class SaleSerializer(OrganizationModelSerializer):
     class Meta:
         model = Sale
         fields = '__all__'
@@ -168,7 +198,7 @@ class SaleSerializer(serializers.ModelSerializer):
         return value
 
 
-class SaleItemSerializer(serializers.ModelSerializer):
+class SaleItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = SaleItem
         fields = '__all__'
@@ -193,7 +223,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
         return data
 
 
-class StockTransferSerializer(serializers.ModelSerializer):
+class StockTransferSerializer(OrganizationModelSerializer):
     class Meta:
         model = StockTransfer
         fields = '__all__'
@@ -210,7 +240,7 @@ class StockTransferSerializer(serializers.ModelSerializer):
         return data
 
 
-class StockTransferItemSerializer(serializers.ModelSerializer):
+class StockTransferItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = StockTransferItem
         fields = '__all__'
@@ -229,14 +259,14 @@ class StockTransferItemSerializer(serializers.ModelSerializer):
         return data
 
 
-class WriteOffSerializer(serializers.ModelSerializer):
+class WriteOffSerializer(OrganizationModelSerializer):
     class Meta:
         model = WriteOff
         fields = '__all__'
         read_only_fields = ['status']
 
 
-class WriteOffItemSerializer(serializers.ModelSerializer):
+class WriteOffItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = WriteOffItem
         fields = '__all__'
@@ -256,14 +286,14 @@ class WriteOffItemSerializer(serializers.ModelSerializer):
         return data
 
 
-class InventorySerializer(serializers.ModelSerializer):
+class InventorySerializer(OrganizationModelSerializer):
     class Meta:
         model = Inventory
         fields = '__all__'
         read_only_fields = ['status']
 
 
-class InventoryItemSerializer(serializers.ModelSerializer):
+class InventoryItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = InventoryItem
         fields = '__all__'
@@ -283,7 +313,7 @@ class InventoryItemSerializer(serializers.ModelSerializer):
         return data
 
 
-class CashAccountSerializer(serializers.ModelSerializer):
+class CashAccountSerializer(OrganizationModelSerializer):
     class Meta:
         model = CashAccount
         fields = '__all__'
@@ -296,13 +326,13 @@ class CashAccountSerializer(serializers.ModelSerializer):
         return value
 
 
-class FinanceCategorySerializer(serializers.ModelSerializer):
+class FinanceCategorySerializer(OrganizationModelSerializer):
     class Meta:
         model = FinanceCategory
         fields = '__all__'
 
 
-class CashTransactionSerializer(serializers.ModelSerializer):
+class CashTransactionSerializer(OrganizationModelSerializer):
     class Meta:
         model = CashTransaction
         fields = '__all__'
@@ -314,7 +344,7 @@ class CashTransactionSerializer(serializers.ModelSerializer):
         return value
 
 
-class MoneyTransferSerializer(serializers.ModelSerializer):
+class MoneyTransferSerializer(OrganizationModelSerializer):
     class Meta:
         model = MoneyTransfer
         fields = '__all__'
@@ -337,37 +367,47 @@ class MoneyTransferSerializer(serializers.ModelSerializer):
         return data
 
 
-class DebtSerializer(serializers.ModelSerializer):
+class DebtSerializer(OrganizationModelSerializer):
+    remaining = serializers.SerializerMethodField()
+    is_overdue = serializers.SerializerMethodField()
+
     class Meta:
         model = Debt
         fields = '__all__'
+        read_only_fields = ['paid_amount','status','sale','purchase','created_at']
 
-    def validate_amount(self, value):
+    def validate_amount(self,value):
         if value <= 0:
-            raise serializers.ValidationError('Сумма должна быть больше 0')
+            raise serializers.ValidationError('????? ?????? ???? ?????? 0')
         return value
 
+    def get_remaining(self,obj):
+        return obj.amount-obj.paid_amount
 
-class AuditLogSerializer(serializers.ModelSerializer):
+    def get_is_overdue(self,obj):
+        return bool(obj.due_date and obj.status != 'PAID' and obj.due_date < timezone.now().date())
+
+
+class AuditLogSerializer(OrganizationModelSerializer):
     class Meta:
         model = AuditLog
         fields = '__all__'
 
 
-class NotificationSerializer(serializers.ModelSerializer):
+class NotificationSerializer(OrganizationModelSerializer):
     class Meta:
         model = Notification
         fields = '__all__'
         read_only_fields = ['user', 'created_at']
 
 
-class SaleReturnSerializer(serializers.ModelSerializer):
+class SaleReturnSerializer(OrganizationModelSerializer):
     class Meta:
         model = SaleReturn
         fields = '__all__'
         read_only_fields = ['status']
 
-class SaleReturnItemSerializer(serializers.ModelSerializer):
+class SaleReturnItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = SaleReturnItem
         fields = '__all__'
@@ -390,13 +430,13 @@ class SaleReturnItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Нельзя менять проведённый возврат')
         return data
 
-class PurchaseReturnSerializer(serializers.ModelSerializer):
+class PurchaseReturnSerializer(OrganizationModelSerializer):
     class Meta:
         model = PurchaseReturn
         fields = '__all__'
         read_only_fields = ['status']
 
-class PurchaseReturnItemSerializer(serializers.ModelSerializer):
+class PurchaseReturnItemSerializer(OrganizationModelSerializer):
     class Meta:
         model = PurchaseReturnItem
         fields = '__all__'

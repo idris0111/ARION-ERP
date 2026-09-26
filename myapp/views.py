@@ -2,7 +2,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Q,Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -17,6 +17,7 @@ from accounts.models import User
 from .models import (SaleReturn,SaleReturnItem,PurchaseReturn,PurchaseReturnItem,Organization,Branch,OrganizationMember,Department,Position,Employee,SalaryPayment,Counterparty,ContactPerson,Category,Unit,Brand,
     Product,PriceType,ProductPrice,Warehouse,Stock,StockMovement,Purchase,PurchaseItem,Sale,SaleItem,StockTransfer,StockTransferItem,
     WriteOff,WriteOffItem,Inventory,InventoryItem,CashAccount,FinanceCategory,CashTransaction,MoneyTransfer,Debt,AuditLog,Notification,
+    StockReservation,DebtPayment,Account,JournalEntry,JournalEntryLine,DealStage,Lead,Deal,CRMTask,CRMActivity,
 )
 from .serializers import (
     SaleReturnSerializer,SaleReturnItemSerializer,PurchaseReturnSerializer,PurchaseReturnItemSerializer,
@@ -25,8 +26,17 @@ from .serializers import (
     StockSerializer,StockMovementSerializer,PurchaseSerializer,PurchaseItemSerializer,SaleSerializer,SaleItemSerializer,StockTransferSerializer,StockTransferItemSerializer,
     WriteOffSerializer,WriteOffItemSerializer,InventorySerializer,InventoryItemSerializer,CashAccountSerializer,FinanceCategorySerializer,CashTransactionSerializer,MoneyTransferSerializer,DebtSerializer,AuditLogSerializer,NotificationSerializer,
 )
+from .advanced_serializers import (AccountSerializer,CRMActivitySerializer,CRMTaskSerializer,DealSerializer,DealStageSerializer,
+    DebtPaymentSerializer,JournalEntryLineSerializer,JournalEntrySerializer,LeadSerializer,StockReservationSerializer,)
 
 from .permissions import (IsAdminOrDirector,IsAccountant,IsWarehouseWorker,IsSalesWorker,IsPurchaseWorker,IsHRWorker,IsAuditor,)
+from .cache_utils import (
+    delete_cached, get_cached, invalidate_purchase_cache, invalidate_sales_cache,
+    invalidate_stock_cache, set_cached,
+)
+from .accounting import (cancel_entries,entry_totals,post_cash_transaction_entry,post_debt_payment_entry,
+    post_purchase_entry,post_salary_entry,post_sale_entry,post_transfer_entry,)
+from .tenancy import OrganizationScopedMixin,ensure_organization_access,get_object_organization_id,organization_cache_scope,scope_queryset
 
 
 # =========================================================
@@ -35,6 +45,7 @@ from .permissions import (IsAdminOrDirector,IsAccountant,IsWarehouseWorker,IsSal
 
 def create_audit(request, action, obj, description):
     AuditLog.objects.create(
+        organization_id=get_object_organization_id(obj),
         user=request.user,
         action=action,
         model_name=obj.__class__.__name__,
@@ -44,8 +55,13 @@ def create_audit(request, action, obj, description):
     )
 
 
-def notify_roles(roles, title, message, notification_type='INFO'):
+def notify_roles(roles, title, message, notification_type='INFO', organization=None):
     users = User.objects.filter(role__in=roles, is_active=True)
+    if organization is not None:
+        users = users.filter(
+            Q(organization_memberships__organization=organization,organization_memberships__is_active=True)|
+            ~Q(organization_memberships__is_active=True)
+        ).distinct()
     for user in users:
         Notification.objects.create(
             user=user,
@@ -55,8 +71,12 @@ def notify_roles(roles, title, message, notification_type='INFO'):
         )
 
 
+def get_scoped_object(request,model,**kwargs):
+    return get_object_or_404(scope_queryset(model.objects.all(),request.user),**kwargs)
+
+
 class PostedDocumentProtectMixin:
-    protected_statuses = ('POSTED',)
+    protected_statuses = ('POSTED','CANCELLED')
 
     def update(self, request, *args, **kwargs):
         obj = self.get_object()
@@ -81,7 +101,7 @@ class PostedItemProtectMixin:
     document_field = None
 
     def _is_posted(self, obj):
-        return getattr(obj, self.document_field).status == 'POSTED'
+        return getattr(obj,self.document_field).status != 'DRAFT'
 
     def update(self, request, *args, **kwargs):
         if self._is_posted(self.get_object()):
@@ -186,37 +206,44 @@ def process_purchase_payment(purchase):
 # ORGANIZATION
 # =========================================================
 
-class OrganizationListCreateView(ListCreateAPIView):
+class OrganizationListCreateView(OrganizationScopedMixin, ListCreateAPIView):
+    queryset = Organization.objects.all()
+    serializer_class = OrganizationSerializer
+    permission_classes = [IsAdminOrDirector]
+
+    def perform_create(self,serializer):
+        organization = serializer.save()
+        OrganizationMember.objects.get_or_create(
+            organization=organization,user=self.request.user,
+            defaults={'role':'OWNER','is_active':True},
+        )
+
+
+class OrganizationDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Organization.objects.all()
     serializer_class = OrganizationSerializer
     permission_classes = [IsAdminOrDirector]
 
 
-class OrganizationDetailView(RetrieveUpdateDestroyAPIView):
-    queryset = Organization.objects.all()
-    serializer_class = OrganizationSerializer
-    permission_classes = [IsAdminOrDirector]
-
-
-class BranchListCreateView(ListCreateAPIView):
+class BranchListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Branch.objects.all()
     serializer_class = BranchSerializer
     permission_classes = [IsAdminOrDirector]
 
 
-class BranchDetailView(RetrieveUpdateDestroyAPIView):
+class BranchDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Branch.objects.all()
     serializer_class = BranchSerializer
     permission_classes = [IsAdminOrDirector]
 
 
-class OrganizationMemberListCreateView(ListCreateAPIView):
+class OrganizationMemberListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = OrganizationMember.objects.all()
     serializer_class = OrganizationMemberSerializer
     permission_classes = [IsAdminOrDirector]
 
 
-class OrganizationMemberDetailView(RetrieveUpdateDestroyAPIView):
+class OrganizationMemberDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = OrganizationMember.objects.all()
     serializer_class = OrganizationMemberSerializer
     permission_classes = [IsAdminOrDirector]
@@ -226,50 +253,50 @@ class OrganizationMemberDetailView(RetrieveUpdateDestroyAPIView):
 # EMPLOYEES
 # =========================================================
 
-class DepartmentListCreateView(ListCreateAPIView):
+class DepartmentListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
     permission_classes = [IsHRWorker]
 
 
-class DepartmentDetailView(RetrieveUpdateDestroyAPIView):
+class DepartmentDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
     permission_classes = [IsHRWorker]
 
 
-class PositionListCreateView(ListCreateAPIView):
+class PositionListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Position.objects.all()
     serializer_class = PositionSerializer
     permission_classes = [IsHRWorker]
 
 
-class PositionDetailView(RetrieveUpdateDestroyAPIView):
+class PositionDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Position.objects.all()
     serializer_class = PositionSerializer
     permission_classes = [IsHRWorker]
 
 
-class EmployeeListCreateView(ListCreateAPIView):
+class EmployeeListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Employee.objects.all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsHRWorker]
     filterset_fields = ['organization', 'branch', 'department', 'position', 'status']
     search_fields = ['user__username', 'user__first_name', 'user__last_name']
 
-class EmployeeDetailView(RetrieveUpdateDestroyAPIView):
+class EmployeeDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Employee.objects.all()
     serializer_class = EmployeeSerializer
     permission_classes = [IsHRWorker]
 
 
-class SalaryPaymentListCreateView(ListCreateAPIView):
+class SalaryPaymentListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = SalaryPayment.objects.all()
     serializer_class = SalaryPaymentSerializer
     permission_classes = [IsHRWorker]
 
 
-class SalaryPaymentDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class SalaryPaymentDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     protected_statuses = ('PAID',)
     queryset = SalaryPayment.objects.all()
     serializer_class = SalaryPaymentSerializer
@@ -280,7 +307,7 @@ class PaySalaryView(APIView):
     permission_classes = [IsHRWorker]
 
     def post(self, request, pk):
-        salary = get_object_or_404(SalaryPayment, pk=pk)
+        salary = get_scoped_object(request,SalaryPayment,pk=pk)
         if salary.status == 'PAID':
             return Response({'error': 'Зарплата уже выплачена'}, status=400)
         if not salary.cash_account_id:
@@ -301,7 +328,7 @@ class PaySalaryView(APIView):
 
             account.balance -= salary.amount
             account.save()
-            CashTransaction.objects.create(
+            cash_transaction = CashTransaction.objects.create(
                 organization=salary.employee.organization,
                 account=account,
                 number=f'SALARY-{uuid4().hex}',
@@ -312,7 +339,9 @@ class PaySalaryView(APIView):
                 status='POSTED',
             )
             salary.status = 'PAID'
+            salary.paid_at = timezone.now()
             salary.save()
+            post_salary_entry(salary,request.user)
             create_audit(
                 request,
                 'POST',
@@ -324,6 +353,7 @@ class PaySalaryView(APIView):
                 'Зарплата выплачена',
                 f'Выплачена зарплата сотруднику {salary.employee}: {salary.amount}',
                 'SALARY',
+                organization=salary.employee.organization,
             )
 
         return Response({
@@ -337,25 +367,28 @@ class PaySalaryView(APIView):
 # COUNTERPARTIES
 # =========================================================
 
-class CounterpartyListCreateView(ListCreateAPIView):
+class CounterpartyListCreateView(OrganizationScopedMixin, ListCreateAPIView):
+    queryset = Counterparty.objects.all()
+    serializer_class = CounterpartySerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['organization','counterparty_type','person_type','is_active']
+    search_fields = ['name','inn','phone','email']
+    ordering_fields = ['name','created_at','opening_balance']
+
+
+class CounterpartyDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Counterparty.objects.all()
     serializer_class = CounterpartySerializer
     permission_classes = [IsAuthenticated]
 
 
-class CounterpartyDetailView(RetrieveUpdateDestroyAPIView):
-    queryset = Counterparty.objects.all()
-    serializer_class = CounterpartySerializer
-    permission_classes = [IsAuthenticated]
-
-
-class ContactPersonListCreateView(ListCreateAPIView):
+class ContactPersonListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = ContactPerson.objects.all()
     serializer_class = ContactPersonSerializer
     permission_classes = [IsAuthenticated]
 
 
-class ContactPersonDetailView(RetrieveUpdateDestroyAPIView):
+class ContactPersonDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = ContactPerson.objects.all()
     serializer_class = ContactPersonSerializer
     permission_classes = [IsAuthenticated]
@@ -365,73 +398,111 @@ class ContactPersonDetailView(RetrieveUpdateDestroyAPIView):
 # CATALOG
 # =========================================================
 
-class CategoryListCreateView(ListCreateAPIView):
+class CategoryListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
 
 
-class CategoryDetailView(RetrieveUpdateDestroyAPIView):
+class CategoryDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [IsAuthenticated]
 
 
-class UnitListCreateView(ListCreateAPIView):
+class UnitListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
     permission_classes = [IsAuthenticated]
 
 
-class UnitDetailView(RetrieveUpdateDestroyAPIView):
+class UnitDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Unit.objects.all()
     serializer_class = UnitSerializer
     permission_classes = [IsAuthenticated]
 
 
-class BrandListCreateView(ListCreateAPIView):
+class BrandListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Brand.objects.all()
     serializer_class = BrandSerializer
     permission_classes = [IsAuthenticated]
 
 
-class BrandDetailView(RetrieveUpdateDestroyAPIView):
+class BrandDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Brand.objects.all()
     serializer_class = BrandSerializer
     permission_classes = [IsAuthenticated]
 
 
-class ProductListCreateView(ListCreateAPIView):
+class ProductListCreateView(OrganizationScopedMixin, ListCreateAPIView):
+    queryset = Product.objects.all().order_by('id')
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ['organization','category','brand','unit','is_service','is_active']
+    search_fields = ['name','sku','barcode','description']
+    ordering_fields = ['name','purchase_price','sale_price','created_at']
+
+    def list(self, request, *args, **kwargs):
+        params = request.query_params.urlencode()
+        scope = organization_cache_scope(request.user)
+        parts = [value for value in (scope,params) if value]
+        cache_key = 'products_list' if not parts else f"products_list_{'_'.join(parts)}"
+        data = get_cached(cache_key)
+        if data is None:
+            response = super().list(request, *args, **kwargs)
+            data = response.data
+            set_cached(cache_key, data, 60, 'products_list')
+        return Response(data)
+
+    def perform_create(self, serializer):
+        product = serializer.save()
+        delete_cached('products_list', f'product_{product.pk}', 'dashboard', 'stocks', 'stock_report', 'top_products')
+
+
+class ProductDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated]
 
+    def retrieve(self, request, *args, **kwargs):
+        self.get_object()
+        cache_key = f"product_{kwargs['pk']}"
+        data = get_cached(cache_key)
+        if data is None:
+            response = super().retrieve(request, *args, **kwargs)
+            data = response.data
+            set_cached(cache_key, data, 60)
+        return Response(data)
 
-class ProductDetailView(RetrieveUpdateDestroyAPIView):
-    queryset = Product.objects.all()
-    serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated]
+    def perform_update(self, serializer):
+        product = serializer.save()
+        delete_cached('products_list', f'product_{product.pk}', 'dashboard', 'stocks', 'stock_report', 'top_products')
+
+    def perform_destroy(self, instance):
+        product_id = instance.pk
+        instance.delete()
+        delete_cached('products_list', f'product_{product_id}', 'dashboard', 'stocks', 'stock_report', 'top_products')
 
 
-class PriceTypeListCreateView(ListCreateAPIView):
+class PriceTypeListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = PriceType.objects.all()
     serializer_class = PriceTypeSerializer
     permission_classes = [IsAuthenticated]
 
 
-class PriceTypeDetailView(RetrieveUpdateDestroyAPIView):
+class PriceTypeDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = PriceType.objects.all()
     serializer_class = PriceTypeSerializer
     permission_classes = [IsAuthenticated]
 
 
-class ProductPriceListCreateView(ListCreateAPIView):
+class ProductPriceListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = ProductPrice.objects.all()
     serializer_class = ProductPriceSerializer
     permission_classes = [IsAuthenticated]
 
 
-class ProductPriceDetailView(RetrieveUpdateDestroyAPIView):
+class ProductPriceDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = ProductPrice.objects.all()
     serializer_class = ProductPriceSerializer
     permission_classes = [IsAuthenticated]
@@ -441,42 +512,56 @@ class ProductPriceDetailView(RetrieveUpdateDestroyAPIView):
 # WAREHOUSE
 # =========================================================
 
-class WarehouseListCreateView(ListCreateAPIView):
+class WarehouseListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Warehouse.objects.all()
     serializer_class = WarehouseSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class WarehouseDetailView(RetrieveUpdateDestroyAPIView):
+class WarehouseDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Warehouse.objects.all()
     serializer_class = WarehouseSerializer
     permission_classes = [IsWarehouseWorker]
 
-class StockListView(ListAPIView):
-    queryset = Stock.objects.all()
+class StockListView(OrganizationScopedMixin, ListAPIView):
+    queryset = Stock.objects.all().order_by('id')
     serializer_class = StockSerializer
     permission_classes = [IsAuthenticated]
     filterset_fields = ['warehouse', 'product']
     search_fields = ['product__name', 'product__sku', 'product__barcode']
     ordering_fields = ['quantity', 'average_cost']
 
+    def list(self, request, *args, **kwargs):
+        params = request.query_params.urlencode()
+        scope = organization_cache_scope(request.user)
+        parts = [value for value in (scope,params) if value]
+        cache_key = 'stocks' if not parts else f"stocks_{'_'.join(parts)}"
+        data = get_cached(cache_key)
+        if data is None:
+            response = super().list(request, *args, **kwargs)
+            data = response.data
+            set_cached(cache_key, data, 15, 'stocks')
+        return Response(data)
 
-class StockDetailView(RetrieveAPIView):
+
+class StockDetailView(OrganizationScopedMixin, RetrieveAPIView):
     queryset = Stock.objects.all()
     serializer_class = StockSerializer
     permission_classes = [IsAuthenticated]
 
 
-class StockMovementListView(ListAPIView):
+class StockMovementListView(OrganizationScopedMixin, ListAPIView):
     queryset = StockMovement.objects.all().order_by('-created_at')
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated]
+    filterset_fields = ['warehouse','product','movement_type','document_type','document_id']
+    ordering_fields = ['created_at','quantity','unit_cost']
 
 
 # =========================================================
 # PURCHASE
 # =========================================================
-class PurchaseListCreateView(ListCreateAPIView):
+class PurchaseListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Purchase.objects.all().order_by('-created_at')
     serializer_class = PurchaseSerializer
     permission_classes = [IsPurchaseWorker]
@@ -484,19 +569,19 @@ class PurchaseListCreateView(ListCreateAPIView):
     search_fields = ['number']
     ordering_fields = ['created_at', 'total_amount']
 
-class PurchaseDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class PurchaseDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Purchase.objects.all()
     serializer_class = PurchaseSerializer
     permission_classes = [IsPurchaseWorker]
 
 
-class PurchaseItemListCreateView(ListCreateAPIView):
+class PurchaseItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = PurchaseItem.objects.all()
     serializer_class = PurchaseItemSerializer
     permission_classes = [IsPurchaseWorker]
 
 
-class PurchaseItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+class PurchaseItemDetailView(PostedItemProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     document_field = 'purchase'
     queryset = PurchaseItem.objects.all()
     serializer_class = PurchaseItemSerializer
@@ -507,7 +592,7 @@ class PostPurchaseView(APIView):
     permission_classes = [IsPurchaseWorker]
 
     def post(self, request, pk):
-        purchase = get_object_or_404(Purchase, pk=pk)
+        purchase = get_scoped_object(request,Purchase,pk=pk)
 
         if purchase.status == 'POSTED':
             return Response(
@@ -584,6 +669,7 @@ class PostPurchaseView(APIView):
             process_purchase_payment(purchase)
             purchase.status = 'POSTED'
             purchase.save()
+            post_purchase_entry(purchase)
 
             create_audit(
                 request,
@@ -596,8 +682,10 @@ class PostPurchaseView(APIView):
                 'Новая закупка',
                 f'Закупка №{purchase.number} проведена на сумму {purchase.total_amount}',
                 'PURCHASE',
+                organization=purchase.organization,
             )
 
+        invalidate_purchase_cache()
         return Response({
             'message': 'Закупка успешно проведена',
             'purchase_id': purchase.id,
@@ -607,9 +695,10 @@ class PostPurchaseView(APIView):
 
 class UnpostPurchaseView(APIView):
     permission_classes = [IsPurchaseWorker]
+    cancel_document = False
 
     def post(self, request, pk):
-        purchase = get_object_or_404(Purchase, pk=pk)
+        purchase = get_scoped_object(request,Purchase,pk=pk)
 
         if purchase.status != 'POSTED':
             return Response(
@@ -637,7 +726,7 @@ class UnpostPurchaseView(APIView):
                         status=400
                     )
 
-                if stock.quantity < item.quantity:
+                if stock.available_quantity < item.quantity:
                     return Response(
                         {
                             'error':
@@ -679,8 +768,9 @@ class UnpostPurchaseView(APIView):
 
             Debt.objects.filter(purchase=purchase).delete()
 
-            purchase.status = 'DRAFT'
+            purchase.status = 'CANCELLED' if self.cancel_document else 'DRAFT'
             purchase.save()
+            cancel_entries('PURCHASE',purchase.pk)
 
             create_audit(
                 request,
@@ -689,6 +779,7 @@ class UnpostPurchaseView(APIView):
                 f'Отменено проведение закупки №{purchase.number}'
             )
 
+        invalidate_purchase_cache()
         return Response({
             'message': 'Проведение закупки отменено'
         })
@@ -698,7 +789,7 @@ class UnpostPurchaseView(APIView):
 # SALE
 # =========================================================
 
-class SaleListCreateView(ListCreateAPIView):
+class SaleListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Sale.objects.all().order_by('-created_at')
     serializer_class = SaleSerializer
     permission_classes = [IsSalesWorker]
@@ -706,19 +797,19 @@ class SaleListCreateView(ListCreateAPIView):
     search_fields = ['number']
     ordering_fields = ['created_at', 'total_amount']
 
-class SaleDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class SaleDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Sale.objects.all()
     serializer_class = SaleSerializer
     permission_classes = [IsSalesWorker]
 
 
-class SaleItemListCreateView(ListCreateAPIView):
+class SaleItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = SaleItem.objects.all()
     serializer_class = SaleItemSerializer
     permission_classes = [IsSalesWorker]
 
 
-class SaleItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+class SaleItemDetailView(PostedItemProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     document_field = 'sale'
     queryset = SaleItem.objects.all()
     serializer_class = SaleItemSerializer
@@ -729,7 +820,7 @@ class PostSaleView(APIView):
     permission_classes = [IsSalesWorker]
 
     def post(self, request, pk):
-        sale = get_object_or_404(Sale, pk=pk)
+        sale = get_scoped_object(request,Sale,pk=pk)
 
         if sale.status == 'POSTED':
             return Response(
@@ -766,7 +857,7 @@ class PostSaleView(APIView):
                         status=400
                     )
 
-                if stock.quantity < item.quantity:
+                if stock.available_quantity < item.quantity:
                     return Response(
                         {
                             'error':
@@ -819,6 +910,7 @@ class PostSaleView(APIView):
             process_sale_payment(sale)
             sale.status = 'POSTED'
             sale.save()
+            post_sale_entry(sale)
 
             create_audit(
                 request,
@@ -831,8 +923,10 @@ class PostSaleView(APIView):
                 'Новая продажа',
                 f'Продажа №{sale.number} проведена на сумму {sale.total_amount}',
                 'SALE',
+                organization=sale.organization,
             )
 
+        invalidate_sales_cache()
         return Response({
             'message': 'Продажа успешно проведена',
             'sale_id': sale.id,
@@ -842,9 +936,10 @@ class PostSaleView(APIView):
 
 class UnpostSaleView(APIView):
     permission_classes = [IsSalesWorker]
+    cancel_document = False
 
     def post(self, request, pk):
-        sale = get_object_or_404(Sale, pk=pk)
+        sale = get_scoped_object(request,Sale,pk=pk)
 
         if sale.status != 'POSTED':
             return Response(
@@ -891,8 +986,9 @@ class UnpostSaleView(APIView):
 
             Debt.objects.filter(sale=sale).delete()
 
-            sale.status = 'DRAFT'
+            sale.status = 'CANCELLED' if self.cancel_document else 'DRAFT'
             sale.save()
+            cancel_entries('SALE',sale.pk)
 
             create_audit(
                 request,
@@ -901,6 +997,7 @@ class UnpostSaleView(APIView):
                 f'Отменено проведение продажи №{sale.number}'
             )
 
+        invalidate_sales_cache()
         return Response({
             'message': 'Проведение продажи отменено'
         })
@@ -910,25 +1007,33 @@ class UnpostSaleView(APIView):
 # STOCK TRANSFER
 # =========================================================
 
-class StockTransferListCreateView(ListCreateAPIView):
+class CancelSaleView(UnpostSaleView):
+    cancel_document = True
+
+
+class CancelPurchaseView(UnpostPurchaseView):
+    cancel_document = True
+
+
+class StockTransferListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = StockTransfer.objects.all().order_by('-created_at')
     serializer_class = StockTransferSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class StockTransferDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class StockTransferDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = StockTransfer.objects.all()
     serializer_class = StockTransferSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class StockTransferItemListCreateView(ListCreateAPIView):
+class StockTransferItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = StockTransferItem.objects.all()
     serializer_class = StockTransferItemSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class StockTransferItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+class StockTransferItemDetailView(PostedItemProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     document_field = 'transfer'
     queryset = StockTransferItem.objects.all()
     serializer_class = StockTransferItemSerializer
@@ -939,7 +1044,7 @@ class PostStockTransferView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        transfer = get_object_or_404(StockTransfer, pk=pk)
+        transfer = get_scoped_object(request,StockTransfer,pk=pk)
 
         if transfer.status == 'POSTED':
             return Response(
@@ -984,7 +1089,7 @@ class PostStockTransferView(APIView):
                         status=400
                     )
 
-                if from_stock.quantity < item.quantity:
+                if from_stock.available_quantity < item.quantity:
                     return Response(
                         {
                             'error':
@@ -1046,6 +1151,7 @@ class PostStockTransferView(APIView):
                 f'Проведено перемещение №{transfer.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Перемещение успешно проведено'
         })
@@ -1055,7 +1161,7 @@ class UnpostStockTransferView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        transfer = get_object_or_404(StockTransfer, pk=pk)
+        transfer = get_scoped_object(request,StockTransfer,pk=pk)
 
         if transfer.status != 'POSTED':
             return Response(
@@ -1085,7 +1191,7 @@ class UnpostStockTransferView(APIView):
                         status=400
                     )
 
-                if to_stock.quantity < item.quantity:
+                if to_stock.available_quantity < item.quantity:
                     return Response(
                         {
                             'error':
@@ -1128,6 +1234,7 @@ class UnpostStockTransferView(APIView):
                 f'Отменено перемещение №{transfer.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Проведение перемещения отменено'
         })
@@ -1137,25 +1244,25 @@ class UnpostStockTransferView(APIView):
 # WRITE OFF
 # =========================================================
 
-class WriteOffListCreateView(ListCreateAPIView):
+class WriteOffListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = WriteOff.objects.all().order_by('-created_at')
     serializer_class = WriteOffSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class WriteOffDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class WriteOffDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = WriteOff.objects.all()
     serializer_class = WriteOffSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class WriteOffItemListCreateView(ListCreateAPIView):
+class WriteOffItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = WriteOffItem.objects.all()
     serializer_class = WriteOffItemSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class WriteOffItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+class WriteOffItemDetailView(PostedItemProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     document_field = 'write_off'
     queryset = WriteOffItem.objects.all()
     serializer_class = WriteOffItemSerializer
@@ -1166,7 +1273,7 @@ class PostWriteOffView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        write_off = get_object_or_404(WriteOff, pk=pk)
+        write_off = get_scoped_object(request,WriteOff,pk=pk)
 
         if write_off.status == 'POSTED':
             return Response(
@@ -1205,7 +1312,7 @@ class PostWriteOffView(APIView):
                         status=400
                     )
 
-                if stock.quantity < item.quantity:
+                if stock.available_quantity < item.quantity:
                     return Response(
                         {
                             'error':
@@ -1244,6 +1351,7 @@ class PostWriteOffView(APIView):
                 f'Проведено списание №{write_off.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Списание успешно проведено'
         })
@@ -1253,7 +1361,7 @@ class UnpostWriteOffView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        write_off = get_object_or_404(WriteOff, pk=pk)
+        write_off = get_scoped_object(request,WriteOff,pk=pk)
 
         if write_off.status != 'POSTED':
             return Response(
@@ -1297,6 +1405,7 @@ class UnpostWriteOffView(APIView):
                 f'Отменено списание №{write_off.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Проведение списания отменено'
         })
@@ -1306,25 +1415,25 @@ class UnpostWriteOffView(APIView):
 # INVENTORY
 # =========================================================
 
-class InventoryListCreateView(ListCreateAPIView):
+class InventoryListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Inventory.objects.all().order_by('-created_at')
     serializer_class = InventorySerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class InventoryDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class InventoryDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Inventory.objects.all()
     serializer_class = InventorySerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class InventoryItemListCreateView(ListCreateAPIView):
+class InventoryItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = InventoryItem.objects.all()
     serializer_class = InventoryItemSerializer
     permission_classes = [IsWarehouseWorker]
 
 
-class InventoryItemDetailView(PostedItemProtectMixin, RetrieveUpdateDestroyAPIView):
+class InventoryItemDetailView(PostedItemProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     document_field = 'inventory'
     queryset = InventoryItem.objects.all()
     serializer_class = InventoryItemSerializer
@@ -1335,7 +1444,7 @@ class PostInventoryView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        inventory = get_object_or_404(Inventory, pk=pk)
+        inventory = get_scoped_object(request,Inventory,pk=pk)
 
         if inventory.status == 'POSTED':
             return Response(
@@ -1403,6 +1512,7 @@ class PostInventoryView(APIView):
                 f'Проведена инвентаризация №{inventory.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Инвентаризация успешно проведена'
         })
@@ -1412,7 +1522,7 @@ class UnpostInventoryView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request, pk):
-        inventory = get_object_or_404(Inventory, pk=pk)
+        inventory = get_scoped_object(request,Inventory,pk=pk)
 
         if inventory.status != 'POSTED':
             return Response(
@@ -1456,6 +1566,7 @@ class UnpostInventoryView(APIView):
                 f'Отменена инвентаризация №{inventory.number}'
             )
 
+        invalidate_stock_cache()
         return Response({
             'message': 'Проведение инвентаризации отменено'
         })
@@ -1465,37 +1576,40 @@ class UnpostInventoryView(APIView):
 # FINANCE
 # =========================================================
 
-class CashAccountListCreateView(ListCreateAPIView):
+class CashAccountListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = CashAccount.objects.all()
     serializer_class = CashAccountSerializer
     permission_classes = [IsAccountant]
 
 
-class CashAccountDetailView(RetrieveUpdateDestroyAPIView):
+class CashAccountDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = CashAccount.objects.all()
     serializer_class = CashAccountSerializer
     permission_classes = [IsAccountant]
 
 
-class FinanceCategoryListCreateView(ListCreateAPIView):
+class FinanceCategoryListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = FinanceCategory.objects.all()
     serializer_class = FinanceCategorySerializer
     permission_classes = [IsAccountant]
 
 
-class FinanceCategoryDetailView(RetrieveUpdateDestroyAPIView):
+class FinanceCategoryDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = FinanceCategory.objects.all()
     serializer_class = FinanceCategorySerializer
     permission_classes = [IsAccountant]
 
 
-class CashTransactionListCreateView(ListCreateAPIView):
+class CashTransactionListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = CashTransaction.objects.all().order_by('-created_at')
     serializer_class = CashTransactionSerializer
     permission_classes = [IsAccountant]
+    filterset_fields = ['organization','account','category','counterparty','transaction_type','status']
+    search_fields = ['number','purpose']
+    ordering_fields = ['date','amount','created_at']
 
 
-class CashTransactionDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class CashTransactionDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = CashTransaction.objects.all()
     serializer_class = CashTransactionSerializer
     permission_classes = [IsAccountant]
@@ -1505,10 +1619,7 @@ class PostCashTransactionView(APIView):
     permission_classes = [IsAccountant]
 
     def post(self, request, pk):
-        cash_transaction = get_object_or_404(
-            CashTransaction,
-            pk=pk
-        )
+        cash_transaction = get_scoped_object(request,CashTransaction,pk=pk)
 
         if cash_transaction.status == 'POSTED':
             return Response(
@@ -1539,6 +1650,7 @@ class PostCashTransactionView(APIView):
 
             cash_transaction.status = 'POSTED'
             cash_transaction.save()
+            post_cash_transaction_entry(cash_transaction,request.user)
 
             create_audit(
                 request,
@@ -1558,10 +1670,7 @@ class UnpostCashTransactionView(APIView):
     permission_classes = [IsAccountant]
 
     def post(self, request, pk):
-        cash_transaction = get_object_or_404(
-            CashTransaction,
-            pk=pk
-        )
+        cash_transaction = get_scoped_object(request,CashTransaction,pk=pk)
 
         if cash_transaction.status != 'POSTED':
             return Response(
@@ -1593,6 +1702,7 @@ class UnpostCashTransactionView(APIView):
 
             cash_transaction.status = 'DRAFT'
             cash_transaction.save()
+            cancel_entries('CASH_TRANSACTION',cash_transaction.pk)
 
             create_audit(
                 request,
@@ -1612,7 +1722,7 @@ class UnpostCashTransactionView(APIView):
 # MONEY TRANSFER
 # =========================================================
 
-class MoneyTransferListCreateView(ListCreateAPIView):
+class MoneyTransferListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = MoneyTransfer.objects.all().order_by('-created_at')
     serializer_class = MoneyTransferSerializer
     permission_classes = [IsAccountant]
@@ -1647,7 +1757,8 @@ class MoneyTransferListCreateView(ListCreateAPIView):
             from_account.save()
             to_account.save()
 
-            money_transfer = serializer.save()
+            money_transfer = serializer.save(created_by=self.request.user)
+            post_transfer_entry(money_transfer,self.request.user)
 
             create_audit(
                 self.request,
@@ -1657,7 +1768,7 @@ class MoneyTransferListCreateView(ListCreateAPIView):
             )
 
 
-class MoneyTransferDetailView(RetrieveAPIView):
+class MoneyTransferDetailView(OrganizationScopedMixin, RetrieveAPIView):
     queryset = MoneyTransfer.objects.all()
     serializer_class = MoneyTransferSerializer
     permission_classes = [IsAccountant]
@@ -1667,13 +1778,15 @@ class MoneyTransferDetailView(RetrieveAPIView):
 # DEBTS
 # =========================================================
 
-class DebtListCreateView(ListCreateAPIView):
+class DebtListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = Debt.objects.all().order_by('-created_at')
     serializer_class = DebtSerializer
     permission_classes = [IsAccountant]
+    filterset_fields = ['organization','counterparty','debt_type','status','due_date']
+    ordering_fields = ['created_at','due_date','amount','paid_amount']
 
 
-class DebtDetailView(RetrieveUpdateDestroyAPIView):
+class DebtDetailView(OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = Debt.objects.all()
     serializer_class = DebtSerializer
     permission_classes = [IsAccountant]
@@ -1683,7 +1796,7 @@ class PayDebtView(APIView):
     permission_classes = [IsAccountant]
 
     def post(self, request, pk):
-        debt = get_object_or_404(Debt, pk=pk)
+        debt = get_scoped_object(request,Debt,pk=pk)
         amount = request.data.get('amount')
         cash_account_id = request.data.get('cash_account')
 
@@ -1715,6 +1828,9 @@ class PayDebtView(APIView):
                 CashAccount.objects.select_for_update(),
                 pk=cash_account_id,
             )
+            ensure_organization_access(request.user,account,debt)
+            if account.organization_id != debt.organization_id:
+                return Response({'error':'Касса относится к другой организации'},status=400)
 
             if debt.debt_type == 'CUSTOMER':
                 account.balance += amount
@@ -1728,7 +1844,7 @@ class PayDebtView(APIView):
                 return Response({'error': 'Неверный тип долга'}, status=400)
 
             account.save()
-            CashTransaction.objects.create(
+            cash_transaction = CashTransaction.objects.create(
                 organization=debt.organization,
                 account=account,
                 counterparty=debt.counterparty,
@@ -1746,6 +1862,11 @@ class PayDebtView(APIView):
             else:
                 debt.status = 'PARTIAL'
             debt.save()
+            debt_payment = DebtPayment.objects.create(
+                debt=debt,cash_account=account,cash_transaction=cash_transaction,
+                amount=amount,created_by=request.user,
+            )
+            post_debt_payment_entry(debt_payment,request.user)
 
             create_audit(request, 'UPDATE', debt, f'Оплата долга {amount}')
             if debt.status == 'PAID':
@@ -1754,6 +1875,7 @@ class PayDebtView(APIView):
                     'Долг погашен',
                     f'Долг №{debt.id} полностью погашен',
                     'DEBT',
+                    organization=debt.organization,
                 )
 
         return Response({
@@ -1770,7 +1892,7 @@ class PayDebtView(APIView):
 # NOTIFICATIONS
 # =========================================================
 
-class NotificationListView(ListAPIView):
+class NotificationListView(OrganizationScopedMixin, ListAPIView):
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
 
@@ -1780,7 +1902,7 @@ class NotificationListView(ListAPIView):
         ).order_by('-created_at')
 
 
-class UnreadNotificationListView(ListAPIView):
+class UnreadNotificationListView(OrganizationScopedMixin, ListAPIView):
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
 
@@ -1820,7 +1942,7 @@ class CheckLowStockView(APIView):
     permission_classes = [IsWarehouseWorker]
 
     def post(self, request):
-        stocks = Stock.objects.select_related('product', 'warehouse')
+        stocks = scope_queryset(Stock.objects.select_related('product','warehouse'),request.user)
         count = 0
         for stock in stocks:
             if stock.quantity <= stock.product.min_stock:
@@ -1829,6 +1951,7 @@ class CheckLowStockView(APIView):
                     'Заканчивается товар',
                     f'{stock.product} — остаток {stock.quantity} на складе {stock.warehouse}',
                     'STOCK',
+                    organization=stock.warehouse.organization,
                 )
                 count += 1
         return Response({
@@ -1841,44 +1964,44 @@ class CheckLowStockView(APIView):
 # AUDIT LOG
 # =========================================================
 
-class AuditLogListView(ListAPIView):
+class AuditLogListView(OrganizationScopedMixin, ListAPIView):
     queryset = AuditLog.objects.all().order_by('-created_at')
     serializer_class = AuditLogSerializer
     permission_classes = [IsAuditor]
 
 
-class AuditLogDetailView(RetrieveAPIView):
+class AuditLogDetailView(OrganizationScopedMixin, RetrieveAPIView):
     queryset = AuditLog.objects.all()
     serializer_class = AuditLogSerializer
     permission_classes = [IsAuditor]
 
 
-class SaleReturnListCreateView(ListCreateAPIView):
+class SaleReturnListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = SaleReturn.objects.all().order_by('-created_at')
     serializer_class = SaleReturnSerializer
     permission_classes = [IsSalesWorker]
 
-class SaleReturnDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class SaleReturnDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = SaleReturn.objects.all()
     serializer_class = SaleReturnSerializer
     permission_classes = [IsSalesWorker]
 
-class SaleReturnItemListCreateView(ListCreateAPIView):
+class SaleReturnItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = SaleReturnItem.objects.all()
     serializer_class = SaleReturnItemSerializer
     permission_classes = [IsSalesWorker]
 
-class PurchaseReturnListCreateView(ListCreateAPIView):
+class PurchaseReturnListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = PurchaseReturn.objects.all().order_by('-created_at')
     serializer_class = PurchaseReturnSerializer
     permission_classes = [IsPurchaseWorker]
 
-class PurchaseReturnDetailView(PostedDocumentProtectMixin, RetrieveUpdateDestroyAPIView):
+class PurchaseReturnDetailView(PostedDocumentProtectMixin, OrganizationScopedMixin, RetrieveUpdateDestroyAPIView):
     queryset = PurchaseReturn.objects.all()
     serializer_class = PurchaseReturnSerializer
     permission_classes = [IsPurchaseWorker]
 
-class PurchaseReturnItemListCreateView(ListCreateAPIView):
+class PurchaseReturnItemListCreateView(OrganizationScopedMixin, ListCreateAPIView):
     queryset = PurchaseReturnItem.objects.all()
     serializer_class = PurchaseReturnItemSerializer
     permission_classes = [IsPurchaseWorker]
@@ -1887,7 +2010,7 @@ class PurchaseReturnItemListCreateView(ListCreateAPIView):
 class PostSaleReturnView(APIView):
     permission_classes = [IsSalesWorker]
     def post(self,request,pk):
-        sale_return = get_object_or_404(SaleReturn,pk=pk)
+        sale_return = get_scoped_object(request,SaleReturn,pk=pk)
         if sale_return.status == 'POSTED':
             return Response({'error':'Возврат уже проведён'},status=400)
         items = SaleReturnItem.objects.filter(sale_return=sale_return)
@@ -1916,13 +2039,14 @@ class PostSaleReturnView(APIView):
             sale_return.status = 'POSTED'
             sale_return.save()
             create_audit(request,'POST',sale_return,f'Проведён возврат продажи №{sale_return.number}')
+        invalidate_stock_cache()
         return Response({'message':'Возврат продажи проведён'})
 
 
 class PostPurchaseReturnView(APIView):
     permission_classes = [IsPurchaseWorker]
     def post(self,request,pk):
-        purchase_return = get_object_or_404(PurchaseReturn,pk=pk)
+        purchase_return = get_scoped_object(request,PurchaseReturn,pk=pk)
         if purchase_return.status == 'POSTED':
             return Response({'error':'Возврат уже проведён'},status=400)
         items = PurchaseReturnItem.objects.filter(purchase_return=purchase_return)
@@ -1946,7 +2070,7 @@ class PostPurchaseReturnView(APIView):
             prepared = []
             for item in items:
                 stock = Stock.objects.select_for_update().filter(warehouse=purchase_return.warehouse,product=item.product).first()
-                if not stock or stock.quantity < item.quantity:
+                if not stock or stock.available_quantity < item.quantity:
                     return Response({'error':f'Недостаточно товара {item.product}'},status=400)
                 prepared.append((item,stock))
             for item,stock in prepared:
@@ -1956,4 +2080,257 @@ class PostPurchaseReturnView(APIView):
             purchase_return.status = 'POSTED'
             purchase_return.save()
             create_audit(request,'POST',purchase_return,f'Проведён возврат поставщику №{purchase_return.number}')
+        invalidate_stock_cache()
         return Response({'message':'Возврат поставщику проведён'})
+
+
+class ProductArchiveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self,request,pk):
+        product = get_scoped_object(request,Product,pk=pk)
+        product.is_active = False
+        product.archived_at = timezone.now()
+        product.save(update_fields=['is_active','archived_at'])
+        delete_cached('products_list',f'product_{product.pk}')
+        create_audit(request,'UPDATE',product,'Товар архивирован')
+        return Response({'message':'Товар архивирован'})
+
+
+class StockReservationListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = StockReservation.objects.all().order_by('-created_at')
+    serializer_class = StockReservationSerializer
+    permission_classes = [IsWarehouseWorker]
+    filterset_fields = ['organization','warehouse','product','status']
+
+    def perform_create(self,serializer):
+        data = serializer.validated_data
+        with transaction.atomic():
+            stock = get_object_or_404(Stock.objects.select_for_update(),warehouse=data['warehouse'],product=data['product'])
+            ensure_organization_access(self.request.user,stock)
+            if stock.available_quantity < data['quantity']:
+                raise ValidationError(f'Доступно только {stock.available_quantity}')
+            stock.reserved_quantity += data['quantity']
+            stock.save(update_fields=['reserved_quantity','updated_at'])
+            reservation = serializer.save(created_by=self.request.user)
+            create_audit(self.request,'CREATE',reservation,f'Резерв {reservation.quantity}')
+        invalidate_stock_cache()
+
+
+class ReleaseStockReservationView(APIView):
+    permission_classes = [IsWarehouseWorker]
+
+    def post(self,request,pk):
+        reservation = get_scoped_object(request,StockReservation,pk=pk)
+        if reservation.status != 'ACTIVE':
+            return Response({'error':'Резерв уже снят'},status=400)
+        with transaction.atomic():
+            reservation = StockReservation.objects.select_for_update().get(pk=reservation.pk)
+            stock = Stock.objects.select_for_update().get(warehouse=reservation.warehouse,product=reservation.product)
+            stock.reserved_quantity = max(Decimal('0'),stock.reserved_quantity-reservation.quantity)
+            stock.save(update_fields=['reserved_quantity','updated_at'])
+            reservation.status = 'RELEASED'
+            reservation.released_at = timezone.now()
+            reservation.save(update_fields=['status','released_at'])
+            create_audit(request,'CANCEL',reservation,'Резерв снят')
+        invalidate_stock_cache()
+        return Response({'message':'Резерв снят','available_quantity':stock.available_quantity})
+
+
+class DebtPaymentListView(OrganizationScopedMixin,ListAPIView):
+    queryset = DebtPayment.objects.all().order_by('-created_at')
+    serializer_class = DebtPaymentSerializer
+    permission_classes = [IsAccountant]
+    filterset_fields = ['debt','cash_account']
+
+
+class AccountListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = Account.objects.all().order_by('code')
+    serializer_class = AccountSerializer
+    permission_classes = [IsAccountant]
+    filterset_fields = ['organization','account_type','is_active']
+    search_fields = ['code','name']
+
+
+class AccountDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = Account.objects.all()
+    serializer_class = AccountSerializer
+    permission_classes = [IsAccountant]
+
+
+class JournalEntryListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = JournalEntry.objects.prefetch_related('lines').order_by('-date','-id')
+    serializer_class = JournalEntrySerializer
+    permission_classes = [IsAccountant]
+    filterset_fields = ['organization','status','document_type']
+    search_fields = ['description']
+
+    def perform_create(self,serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class JournalEntryDetailView(PostedDocumentProtectMixin,OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    protected_statuses = ('POSTED','CANCELLED')
+    queryset = JournalEntry.objects.prefetch_related('lines')
+    serializer_class = JournalEntrySerializer
+    permission_classes = [IsAccountant]
+
+
+class JournalEntryLineListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = JournalEntryLine.objects.all()
+    serializer_class = JournalEntryLineSerializer
+    permission_classes = [IsAccountant]
+    filterset_fields = ['journal_entry','account']
+
+
+class JournalEntryLineDetailView(PostedItemProtectMixin,OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    document_field = 'journal_entry'
+    queryset = JournalEntryLine.objects.all()
+    serializer_class = JournalEntryLineSerializer
+    permission_classes = [IsAccountant]
+
+
+class PostJournalEntryView(APIView):
+    permission_classes = [IsAccountant]
+
+    def post(self,request,pk):
+        entry = get_scoped_object(request,JournalEntry,pk=pk)
+        if entry.status != 'DRAFT':
+            return Response({'error':'Проводка не является черновиком'},status=400)
+        debit,credit = entry_totals(entry)
+        if not entry.lines.exists() or debit <= 0 or debit != credit:
+            return Response({'error':f'Проводка не сбалансирована: дебет {debit}, кредит {credit}'},status=400)
+        if entry.lines.exclude(account__organization=entry.organization).exists():
+            return Response({'error':'Счета относятся к другой организации'},status=400)
+        entry.status = 'POSTED'
+        entry.save(update_fields=['status'])
+        create_audit(request,'POST',entry,'Проводка проведена')
+        return Response({'message':'Проводка проведена','debit':debit,'credit':credit})
+
+
+class CancelJournalEntryView(APIView):
+    permission_classes = [IsAccountant]
+
+    def post(self,request,pk):
+        entry = get_scoped_object(request,JournalEntry,pk=pk)
+        if entry.status != 'POSTED':
+            return Response({'error':'Проводка не проведена'},status=400)
+        entry.status = 'CANCELLED'
+        entry.save(update_fields=['status'])
+        create_audit(request,'CANCEL',entry,'Проводка отменена')
+        return Response({'message':'Проводка отменена'})
+
+
+class DealStageListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = DealStage.objects.all()
+    serializer_class = DealStageSerializer
+    permission_classes = [IsSalesWorker]
+    filterset_fields = ['organization','is_closed']
+
+
+class DealStageDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = DealStage.objects.all()
+    serializer_class = DealStageSerializer
+    permission_classes = [IsSalesWorker]
+
+
+class LeadListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = Lead.objects.all().order_by('-created_at')
+    serializer_class = LeadSerializer
+    permission_classes = [IsSalesWorker]
+    filterset_fields = ['organization','status','source','responsible']
+    search_fields = ['name','phone','email']
+    ordering_fields = ['created_at','expected_amount','probability']
+
+
+class LeadDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = Lead.objects.all()
+    serializer_class = LeadSerializer
+    permission_classes = [IsSalesWorker]
+
+
+class ConvertLeadView(APIView):
+    permission_classes = [IsSalesWorker]
+
+    def post(self,request,pk):
+        lead = get_scoped_object(request,Lead,pk=pk)
+        if lead.status == 'CONVERTED':
+            return Response({'error':'Лид уже конвертирован'},status=400)
+        with transaction.atomic():
+            customer = Counterparty.objects.create(
+                organization=lead.organization,name=lead.name,counterparty_type='CUSTOMER',
+                person_type='COMPANY',phone=lead.phone,email=lead.email,
+            )
+            deal = Deal.objects.create(
+                organization=lead.organization,title=request.data.get('title') or lead.name,
+                customer=customer,lead=lead,responsible=lead.responsible,
+                expected_amount=lead.expected_amount,probability=lead.probability,
+            )
+            lead.customer = customer
+            lead.status = 'CONVERTED'
+            lead.save(update_fields=['customer','status','updated_at'])
+            create_audit(request,'UPDATE',lead,f'Лид конвертирован в клиента {customer.pk} и сделку {deal.pk}')
+        return Response({'message':'Лид конвертирован','customer':customer.pk,'deal':deal.pk})
+
+
+class DealListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = Deal.objects.all().order_by('-created_at')
+    serializer_class = DealSerializer
+    permission_classes = [IsSalesWorker]
+    filterset_fields = ['organization','customer','lead','stage','responsible','status']
+    search_fields = ['title','customer__name']
+    ordering_fields = ['created_at','expected_amount','probability']
+
+
+class DealDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = Deal.objects.all()
+    serializer_class = DealSerializer
+    permission_classes = [IsSalesWorker]
+
+
+class CRMTaskListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = CRMTask.objects.all().order_by('due_at','id')
+    serializer_class = CRMTaskSerializer
+    permission_classes = [IsSalesWorker]
+    filterset_fields = ['organization','lead','deal','assigned_to','status']
+    search_fields = ['title']
+
+
+class CRMTaskDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = CRMTask.objects.all()
+    serializer_class = CRMTaskSerializer
+    permission_classes = [IsSalesWorker]
+
+
+class CRMActivityListCreateView(OrganizationScopedMixin,ListCreateAPIView):
+    queryset = CRMActivity.objects.all().order_by('-happened_at')
+    serializer_class = CRMActivitySerializer
+    permission_classes = [IsSalesWorker]
+    filterset_fields = ['organization','activity_type','customer','lead','deal','employee']
+    search_fields = ['subject','notes']
+
+    def perform_create(self,serializer):
+        serializer.save(created_by=self.request.user)
+
+
+class CRMActivityDetailView(OrganizationScopedMixin,RetrieveUpdateDestroyAPIView):
+    queryset = CRMActivity.objects.all()
+    serializer_class = CRMActivitySerializer
+    permission_classes = [IsSalesWorker]
+
+
+class GenerateSalaryPaymentsView(APIView):
+    permission_classes = [IsHRWorker]
+
+    def post(self,request):
+        organization = get_scoped_object(request,Organization,pk=request.data.get('organization'))
+        month = request.data.get('month')
+        if not month:
+            return Response({'error':'Укажите month в формате YYYY-MM-DD'},status=400)
+        created = 0
+        for employee in Employee.objects.filter(organization=organization,status='WORKING'):
+            if SalaryPayment.objects.filter(employee=employee,month=month).exists():
+                continue
+            SalaryPayment.objects.create(employee=employee,month=month,base_salary=employee.salary,amount=employee.salary)
+            created += 1
+        return Response({'message':'Начисления созданы','created':created})

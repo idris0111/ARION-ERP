@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import resolve
 from django.utils import timezone
@@ -11,7 +12,8 @@ from .models import (
     Inventory, InventoryItem, MoneyTransfer, Organization, Product, Purchase, PurchaseItem, PurchaseReturn,
     PurchaseReturnItem, Sale, SaleItem, SaleReturn, SaleReturnItem, SalaryPayment,
     Stock, StockMovement, StockTransfer, StockTransferItem, Warehouse, WriteOff,
-    WriteOffItem,
+    WriteOffItem, Account, Deal, DebtPayment, JournalEntry, JournalEntryLine, Lead,
+    OrganizationMember, StockReservation,
 )
 from .serializers import (
     PurchaseItemSerializer, PurchaseReturnItemSerializer, PurchaseSerializer,
@@ -24,12 +26,26 @@ from .views import (
     PostPurchaseReturnView, PostPurchaseView, PostSaleReturnView, PostSaleView,
     PostStockTransferView, PostWriteOffView, PurchaseDetailView,
     PurchaseItemDetailView, PurchaseReturnDetailView, ReadAllNotificationsView,
-    ReadNotificationView, SaleDetailView, SaleReturnDetailView, StockDetailView,
+    ProductDetailView, ProductListCreateView, ReadNotificationView, SaleDetailView, SaleReturnDetailView, StockDetailView,
     StockListView, StockTransferDetailView, UnpostInventoryView,
     UnpostPurchaseView, UnpostSaleView, UnpostStockTransferView,
     UnpostWriteOffView, UnreadNotificationListView, WriteOffDetailView, notify_roles,
+    ConvertLeadView, PostJournalEntryView, ReleaseStockReservationView,
+    StockReservationListCreateView,
 )
-from .reports import ProfitReportView
+from .reports import (
+    DashboardView, MonthlySalesReportView, ProfitReportView, SalesReportView,
+    StockReportView, TopProductsReportView,
+)
+from .cache_utils import delete_cached, set_cached
+
+
+TEST_CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'erp-cache-tests',
+    }
+}
 
 
 class DocumentPaymentTests(TestCase):
@@ -1036,3 +1052,164 @@ class DocumentPaymentTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response['Content-Type'], content_type)
                 self.assertTrue(response.content)
+
+    @override_settings(CACHES=TEST_CACHES)
+    def test_cached_get_endpoints_use_expected_keys(self):
+        delete_cached(
+            'products_list', f'product_{self.product.pk}', 'stocks', 'dashboard',
+            'sales_report', 'stock_report', 'top_products', 'monthly_sales',
+            'profit_report',
+        )
+        requests_and_keys = [
+            (ProductListCreateView, self.factory.get('/'), {}, 'products_list'),
+            (ProductDetailView, self.factory.get('/'), {'pk': self.product.pk}, f'product_{self.product.pk}'),
+            (StockListView, self.factory.get('/'), {}, 'stocks'),
+            (DashboardView, self.factory.get('/'), {}, 'dashboard'),
+            (
+                SalesReportView,
+                self.factory.get('/', {'date_from': '2026-01-01', 'date_to': '2026-12-31'}),
+                {},
+                'sales_report_2026-01-01_2026-12-31',
+            ),
+            (
+                StockReportView,
+                self.factory.get('/', {'warehouse': self.warehouse.pk}),
+                {},
+                f'stock_report_{self.warehouse.pk}',
+            ),
+            (TopProductsReportView, self.factory.get('/'), {}, 'top_products'),
+            (MonthlySalesReportView, self.factory.get('/'), {}, 'monthly_sales'),
+            (
+                ProfitReportView,
+                self.factory.get('/', {'date_from': '2026-01-01', 'date_to': '2026-12-31'}),
+                {},
+                'profit_report_2026-01-01_2026-12-31',
+            ),
+        ]
+        for view_class, request, kwargs, cache_key in requests_and_keys:
+            with self.subTest(view=view_class.__name__):
+                force_authenticate(request, user=self.user)
+                response = view_class.as_view()(request, **kwargs)
+                self.assertEqual(response.status_code, 200)
+                self.assertIsNotNone(cache.get(cache_key))
+
+        first_response = ProductListCreateView.as_view()(
+            self._authenticated_request(self.factory.get('/'))
+        )
+        self.product.name = 'Changed directly in DB'
+        self.product.save()
+        second_response = ProductListCreateView.as_view()(
+            self._authenticated_request(self.factory.get('/'))
+        )
+        self.assertEqual(first_response.data, second_response.data)
+
+    def _authenticated_request(self, request):
+        force_authenticate(request, user=self.user)
+        return request
+
+    @override_settings(CACHES=TEST_CACHES)
+    def test_product_and_document_operations_invalidate_cache(self):
+        set_cached('products_list', {'stale': True}, 60)
+        set_cached(f'product_{self.product.pk}', {'stale': True}, 60)
+        request = self.factory.patch('/', {'name': 'Updated product'}, format='json')
+        force_authenticate(request, user=self.user)
+        response = ProductDetailView.as_view()(request, pk=self.product.pk)
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(cache.get('products_list'))
+        self.assertIsNone(cache.get(f'product_{self.product.pk}'))
+
+        for key in ('stocks', 'dashboard', 'stock_report', 'top_products', 'monthly_sales', 'profit_report', 'sales_report'):
+            set_cached(key, {'stale': True}, 60)
+        set_cached('sales_report_from_to', {'stale': True}, 60, 'sales_report')
+        set_cached('stock_report_1', {'stale': True}, 60, 'stock_report')
+        sale = self.make_document('sale', 0)
+        response = self.request_action('sale', 'post', sale)
+        self.assertEqual(response.status_code, 200, response.data)
+        for key in (
+            'stocks', 'dashboard', 'stock_report', 'stock_report_1', 'top_products',
+            'monthly_sales', 'profit_report', 'sales_report', 'sales_report_from_to',
+        ):
+            self.assertIsNone(cache.get(key), key)
+
+
+class AdvancedERPTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.user = get_user_model().objects.create_user(username='tenant-manager',role='ADMIN')
+        self.organization = Organization.objects.create(name='Organization A')
+        self.other_organization = Organization.objects.create(name='Organization B')
+        OrganizationMember.objects.create(organization=self.organization,user=self.user,role='ADMIN')
+        self.warehouse = Warehouse.objects.create(organization=self.organization,name='Main')
+        self.product = Product.objects.create(organization=self.organization,name='Product A',sku='A-1')
+        self.other_product = Product.objects.create(organization=self.other_organization,name='Product B',sku='A-1')
+        self.stock = Stock.objects.create(warehouse=self.warehouse,product=self.product,quantity=10,average_cost=4)
+
+    def request(self,method='get',data=None,user=None):
+        request = getattr(self.factory,method)('/',data or {},format='json')
+        force_authenticate(request,user=user or self.user)
+        return request
+
+    def test_organization_isolation_for_product_list_detail_and_create(self):
+        response = ProductListCreateView.as_view()(self.request())
+        self.assertEqual(response.status_code,200)
+        ids = [row['id'] for row in response.data['results']]
+        self.assertEqual(ids,[self.product.pk])
+        response = ProductDetailView.as_view()(self.request(),pk=self.other_product.pk)
+        self.assertEqual(response.status_code,404)
+        response = ProductListCreateView.as_view()(self.request('post',{
+            'organization':self.other_organization.pk,'name':'Blocked','sku':'B-2'
+        }))
+        self.assertEqual(response.status_code,403)
+
+    def test_sale_creates_balanced_accounting_entry(self):
+        customer = Counterparty.objects.create(organization=self.organization,name='Customer',counterparty_type='CUSTOMER')
+        account = CashAccount.objects.create(organization=self.organization,name='Cash',account_type='CASH',balance=0)
+        sale = Sale.objects.create(
+            organization=self.organization,customer=customer,warehouse=self.warehouse,cash_account=account,
+            number='SALE-A',date=timezone.now(),paid_amount=Decimal('6'),created_by=self.user,
+        )
+        SaleItem.objects.create(sale=sale,product=self.product,quantity=1,price=Decimal('10'))
+        response = PostSaleView.as_view()(self.request('post'),pk=sale.pk)
+        self.assertEqual(response.status_code,200,response.data)
+        entry = JournalEntry.objects.get(document_type='SALE',document_id=sale.pk)
+        debit = sum(line.debit for line in entry.lines.all())
+        credit = sum(line.credit for line in entry.lines.all())
+        self.assertEqual(entry.status,'POSTED')
+        self.assertEqual(debit,credit)
+        self.assertEqual(debit,Decimal('14'))
+
+    def test_unbalanced_manual_journal_entry_cannot_be_posted(self):
+        account = Account.objects.create(organization=self.organization,code='100',name='Test',account_type='ASSET')
+        entry = JournalEntry.objects.create(organization=self.organization,date=timezone.now(),description='Draft',created_by=self.user)
+        JournalEntryLine.objects.create(journal_entry=entry,account=account,debit=10,credit=0)
+        response = PostJournalEntryView.as_view()(self.request('post'),pk=entry.pk)
+        self.assertEqual(response.status_code,400)
+        entry.refresh_from_db()
+        self.assertEqual(entry.status,'DRAFT')
+
+    def test_stock_reservation_and_release_move_available_quantity(self):
+        response = StockReservationListCreateView.as_view()(self.request('post',{
+            'organization':self.organization.pk,'warehouse':self.warehouse.pk,
+            'product':self.product.pk,'quantity':'3','reference':'ORDER-1',
+        }))
+        self.assertEqual(response.status_code,201,response.data)
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.available_quantity,Decimal('7'))
+        reservation = StockReservation.objects.get()
+        response = ReleaseStockReservationView.as_view()(self.request('post'),pk=reservation.pk)
+        self.assertEqual(response.status_code,200,response.data)
+        self.stock.refresh_from_db()
+        reservation.refresh_from_db()
+        self.assertEqual(self.stock.available_quantity,Decimal('10'))
+        self.assertEqual(reservation.status,'RELEASED')
+
+    def test_lead_conversion_creates_customer_and_deal_once(self):
+        lead = Lead.objects.create(organization=self.organization,name='New Customer',expected_amount=100,probability=50)
+        response = ConvertLeadView.as_view()(self.request('post'),pk=lead.pk)
+        self.assertEqual(response.status_code,200,response.data)
+        lead.refresh_from_db()
+        self.assertEqual(lead.status,'CONVERTED')
+        self.assertEqual(lead.customer.organization_id,self.organization.pk)
+        self.assertEqual(Deal.objects.get(lead=lead).customer_id,lead.customer_id)
+        response = ConvertLeadView.as_view()(self.request('post'),pk=lead.pk)
+        self.assertEqual(response.status_code,400)

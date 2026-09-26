@@ -3,6 +3,7 @@ from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from .models import Product,Stock,Sale,Purchase,Debt,Employee,CashTransaction
+from .tenancy import scope_queryset
 
 def export_excel(queryset,filename):
     workbook = Workbook()
@@ -28,34 +29,34 @@ def export_excel(queryset,filename):
 class ExportProductsExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Product.objects.all(),'products')
+        return export_excel(scope_queryset(Product.objects.all(),request.user),'products')
 
 class ExportStocksExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Stock.objects.all(),'stocks')
+        return export_excel(scope_queryset(Stock.objects.all(),request.user),'stocks')
 
 class ExportSalesExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Sale.objects.all(),'sales')
+        return export_excel(scope_queryset(Sale.objects.all(),request.user),'sales')
 
 class ExportPurchasesExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Purchase.objects.all(),'purchases')
+        return export_excel(scope_queryset(Purchase.objects.all(),request.user),'purchases')
 
 class ExportDebtsExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Debt.objects.all(),'debts')
+        return export_excel(scope_queryset(Debt.objects.all(),request.user),'debts')
 
 class ExportEmployeesExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(Employee.objects.all(),'employees')
+        return export_excel(scope_queryset(Employee.objects.all(),request.user),'employees')
 
 class ExportCashTransactionsExcelView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self,request):
-        return export_excel(CashTransaction.objects.all(),'cash_transactions')
+        return export_excel(scope_queryset(CashTransaction.objects.all(),request.user),'cash_transactions')

@@ -100,6 +100,9 @@ class Employee(models.Model):
 class SalaryPayment(models.Model):
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='salary_payments')
     cash_account = models.ForeignKey('CashAccount', on_delete=models.PROTECT, null=True, blank=True)
+    base_salary = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    bonus = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    deduction = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     month = models.DateField()
     comment = models.TextField(blank=True)
@@ -108,7 +111,7 @@ class SalaryPayment(models.Model):
         choices=[('DRAFT', 'Draft'), ('PAID', 'Paid')],
         default='DRAFT',
     )
-    paid_at = models.DateTimeField(auto_now_add=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f'{self.employee} - {self.amount}'
@@ -165,6 +168,7 @@ class Category(models.Model):
 
 
 class Unit(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='units', null=True, blank=True)
     name = models.CharField(max_length=100)
     short_name = models.CharField(max_length=20)
 
@@ -173,6 +177,7 @@ class Unit(models.Model):
 
 
 class Brand(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='brands', null=True, blank=True)
     name = models.CharField(max_length=255)
 
     def __str__(self):
@@ -185,9 +190,10 @@ class Product(models.Model):
     brand = models.ForeignKey(Brand, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     name = models.CharField(max_length=255)
-    sku = models.CharField(max_length=100, unique=True)
-    barcode = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    sku = models.CharField(max_length=100)
+    barcode = models.CharField(max_length=100, null=True, blank=True)
     description = models.TextField(blank=True)
+    attributes = models.JSONField(default=dict, blank=True)
     image = models.ImageField(upload_to='products/', null=True, blank=True)
     purchase_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     sale_price = models.DecimalField(max_digits=14, decimal_places=2, default=0)
@@ -197,6 +203,13 @@ class Product(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['organization','sku'],name='unique_product_sku_per_org'),
+            models.UniqueConstraint(fields=['organization','barcode'],condition=models.Q(barcode__isnull=False),name='unique_product_barcode_per_org'),
+        ]
 
     def __str__(self):
         return self.name
@@ -236,6 +249,7 @@ class Stock(models.Model):
     warehouse = models.ForeignKey(Warehouse, on_delete=models.CASCADE, related_name='stocks')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='stocks')
     quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
+    reserved_quantity = models.DecimalField(max_digits=14, decimal_places=3, default=0)
     average_cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -244,6 +258,10 @@ class Stock(models.Model):
 
     def __str__(self):
         return f'{self.product} - {self.quantity}'
+
+    @property
+    def available_quantity(self):
+        return self.quantity-self.reserved_quantity
 
 
 class StockMovement(models.Model):
@@ -462,6 +480,7 @@ class CashAccount(models.Model):
     TYPE_CHOICES = [
         ('CASH', 'Касса'),
         ('BANK', 'Банк'),
+        ('WALLET', 'Wallet'),
         ('CARD', 'Карта'),
         ('OTHER', 'Другое'),
     ]
@@ -565,6 +584,7 @@ class Debt(models.Model):
 
 
 class AuditLog(models.Model):
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='audit_logs', null=True, blank=True)
     ACTION_CHOICES = [
         ('CREATE', 'Создание'),
         ('UPDATE', 'Изменение'),
@@ -654,3 +674,161 @@ class Notification(models.Model):
 
     def __str__(self):
         return self.title
+
+
+class StockReservation(models.Model):
+    STATUS_CHOICES = [('ACTIVE','Active'),('RELEASED','Released')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='stock_reservations')
+    warehouse = models.ForeignKey(Warehouse,on_delete=models.PROTECT,related_name='reservations')
+    product = models.ForeignKey(Product,on_delete=models.PROTECT,related_name='reservations')
+    quantity = models.DecimalField(max_digits=14,decimal_places=3)
+    reference = models.CharField(max_length=100,blank=True)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='ACTIVE')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,related_name='created_stock_reservations')
+    created_at = models.DateTimeField(auto_now_add=True)
+    released_at = models.DateTimeField(null=True,blank=True)
+
+    def __str__(self):
+        return f'{self.product} - {self.quantity}'
+
+
+class DebtPayment(models.Model):
+    debt = models.ForeignKey(Debt,on_delete=models.PROTECT,related_name='payments')
+    cash_account = models.ForeignKey(CashAccount,on_delete=models.PROTECT,related_name='debt_payments')
+    cash_transaction = models.OneToOneField(CashTransaction,on_delete=models.PROTECT,related_name='debt_payment')
+    amount = models.DecimalField(max_digits=16,decimal_places=2)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,related_name='created_debt_payments')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.debt_id} - {self.amount}'
+
+
+class Account(models.Model):
+    TYPE_CHOICES = [('ASSET','Asset'),('LIABILITY','Liability'),('EQUITY','Equity'),('REVENUE','Revenue'),('EXPENSE','Expense')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='accounts')
+    code = models.CharField(max_length=30)
+    name = models.CharField(max_length=255)
+    account_type = models.CharField(max_length=20,choices=TYPE_CHOICES)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['organization','code'],name='unique_account_code_per_org')]
+
+    def __str__(self):
+        return f'{self.code} {self.name}'
+
+
+class JournalEntry(models.Model):
+    STATUS_CHOICES = [('DRAFT','Draft'),('POSTED','Posted'),('CANCELLED','Cancelled')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='journal_entries')
+    date = models.DateTimeField()
+    description = models.CharField(max_length=500)
+    document_type = models.CharField(max_length=100,blank=True)
+    document_id = models.PositiveIntegerField(null=True,blank=True)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='DRAFT')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,related_name='created_journal_entries')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f'{self.id} - {self.description}'
+
+
+class JournalEntryLine(models.Model):
+    journal_entry = models.ForeignKey(JournalEntry,on_delete=models.CASCADE,related_name='lines')
+    account = models.ForeignKey(Account,on_delete=models.PROTECT,related_name='journal_lines')
+    debit = models.DecimalField(max_digits=16,decimal_places=2,default=0)
+    credit = models.DecimalField(max_digits=16,decimal_places=2,default=0)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(debit__gte=0,credit__gte=0),name='journal_line_non_negative'),
+            models.CheckConstraint(condition=(models.Q(debit__gt=0,credit=0)|models.Q(credit__gt=0,debit=0)),name='journal_line_one_side'),
+        ]
+
+    def __str__(self):
+        return f'{self.account}: {self.debit}/{self.credit}'
+
+
+class DealStage(models.Model):
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='deal_stages')
+    name = models.CharField(max_length=100)
+    position = models.PositiveIntegerField(default=0)
+    is_closed = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['position','id']
+
+    def __str__(self):
+        return self.name
+
+
+class Lead(models.Model):
+    STATUS_CHOICES = [('NEW','New'),('CONTACTED','Contacted'),('QUALIFIED','Qualified'),('CONVERTED','Converted'),('LOST','Lost')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='leads')
+    name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=30,blank=True)
+    email = models.EmailField(blank=True)
+    source = models.CharField(max_length=100,blank=True)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='NEW')
+    responsible = models.ForeignKey(Employee,on_delete=models.SET_NULL,null=True,blank=True,related_name='leads')
+    expected_amount = models.DecimalField(max_digits=16,decimal_places=2,default=0)
+    probability = models.PositiveSmallIntegerField(default=0)
+    notes = models.TextField(blank=True)
+    customer = models.ForeignKey(Counterparty,on_delete=models.SET_NULL,null=True,blank=True,related_name='converted_leads')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Deal(models.Model):
+    STATUS_CHOICES = [('OPEN','Open'),('WON','Won'),('LOST','Lost')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='deals')
+    title = models.CharField(max_length=255)
+    customer = models.ForeignKey(Counterparty,on_delete=models.PROTECT,related_name='deals')
+    lead = models.ForeignKey(Lead,on_delete=models.SET_NULL,null=True,blank=True,related_name='deals')
+    stage = models.ForeignKey(DealStage,on_delete=models.SET_NULL,null=True,blank=True,related_name='deals')
+    responsible = models.ForeignKey(Employee,on_delete=models.SET_NULL,null=True,blank=True,related_name='deals')
+    expected_amount = models.DecimalField(max_digits=16,decimal_places=2,default=0)
+    probability = models.PositiveSmallIntegerField(default=0)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='OPEN')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+
+
+class CRMTask(models.Model):
+    STATUS_CHOICES = [('OPEN','Open'),('DONE','Done'),('CANCELLED','Cancelled')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='crm_tasks')
+    title = models.CharField(max_length=255)
+    lead = models.ForeignKey(Lead,on_delete=models.CASCADE,null=True,blank=True,related_name='tasks')
+    deal = models.ForeignKey(Deal,on_delete=models.CASCADE,null=True,blank=True,related_name='tasks')
+    assigned_to = models.ForeignKey(Employee,on_delete=models.SET_NULL,null=True,blank=True,related_name='crm_tasks')
+    due_at = models.DateTimeField(null=True,blank=True)
+    status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='OPEN')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
+
+
+class CRMActivity(models.Model):
+    TYPE_CHOICES = [('NOTE','Note'),('CALL','Call'),('MEETING','Meeting'),('STATUS','Status change')]
+    organization = models.ForeignKey(Organization,on_delete=models.CASCADE,related_name='crm_activities')
+    activity_type = models.CharField(max_length=20,choices=TYPE_CHOICES,default='NOTE')
+    subject = models.CharField(max_length=255)
+    notes = models.TextField(blank=True)
+    customer = models.ForeignKey(Counterparty,on_delete=models.CASCADE,null=True,blank=True,related_name='activities')
+    lead = models.ForeignKey(Lead,on_delete=models.CASCADE,null=True,blank=True,related_name='activities')
+    deal = models.ForeignKey(Deal,on_delete=models.CASCADE,null=True,blank=True,related_name='activities')
+    employee = models.ForeignKey(Employee,on_delete=models.SET_NULL,null=True,blank=True,related_name='crm_activities')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.SET_NULL,null=True,related_name='created_crm_activities')
+    happened_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.subject
