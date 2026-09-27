@@ -76,6 +76,21 @@ def scope_queryset(queryset,user,lookup=None):
     return queryset.filter(**{f'{lookup}__in':ids})
 
 
+def selected_organization_id(request):
+    """Validate the company switcher header against the user's memberships."""
+    value = request.headers.get('X-Organization-ID') or request.GET.get('organization')
+    if not value:
+        return None
+    try:
+        selected = int(value)
+    except (TypeError, ValueError):
+        raise PermissionDenied('Некорректная организация')
+    allowed = get_user_organization_ids(request.user)
+    if allowed is not None and selected not in allowed:
+        raise PermissionDenied('Нет доступа к организации')
+    return selected
+
+
 def get_object_organization_id(obj):
     if obj is None:
         return None
@@ -114,7 +129,12 @@ class OrganizationScopedMixin:
     organization_lookup = None
 
     def get_queryset(self):
-        return scope_queryset(super().get_queryset(),self.request.user,self.organization_lookup)
+        queryset = scope_queryset(super().get_queryset(),self.request.user,self.organization_lookup)
+        selected = selected_organization_id(self.request)
+        lookup = self.organization_lookup or ORGANIZATION_LOOKUPS.get(queryset.model.__name__)
+        if selected is not None and lookup:
+            queryset = queryset.filter(**{lookup:selected})
+        return queryset
 
     def perform_create(self,serializer):
         model = serializer.Meta.model

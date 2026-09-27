@@ -19,6 +19,7 @@ from django.urls import path, include, re_path
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from myapp.ui_views import erp_ui
 
 schema_view = get_schema_view(
     openapi.Info(
@@ -31,6 +32,22 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
+    path('', erp_ui, name='erp-dashboard'),
+    path('products/', erp_ui, name='erp-products'),
+    path('products/new/', erp_ui, name='erp-product-create'),
+    path('products/<int:pk>/', erp_ui, name='erp-product-detail'),
+    path('products/<int:pk>/edit/', erp_ui, name='erp-product-edit'),
+    path('sales/', erp_ui, name='erp-sales'),
+    path('sales/new/', erp_ui, name='erp-sale-create'),
+    path('sales/<int:pk>/', erp_ui, name='erp-sale-detail'),
+    path('m/<path:subpath>', erp_ui, name='erp-modules'),
+    path('inventory/', erp_ui, name='erp-inventory'),
+    path('finance/', erp_ui, name='erp-finance'),
+    path('crm/', erp_ui, name='erp-crm'),
+    path('pos/', erp_ui, name='erp-pos'),
+    path('reports/', erp_ui, name='erp-reports'),
+    path('settings/', erp_ui, name='erp-settings'),
+    path('404/', erp_ui, name='erp-not-found'),
     path('admin/', admin.site.urls),
     path('api/account/', include('accounts.urls')),
     path('api/', include('myapp.urls')),

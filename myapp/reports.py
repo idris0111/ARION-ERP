@@ -10,17 +10,17 @@ from .cache_utils import get_cached,parameterized_key,set_cached
 from .models import (CashTransaction,Debt,Employee,Product,Purchase,Sale,SaleItem,
     SalaryPayment,Stock,StockMovement)
 from .permissions import IsAccountant
-from .tenancy import ORGANIZATION_LOOKUPS,organization_cache_scope,scope_queryset
+from .tenancy import ORGANIZATION_LOOKUPS,organization_cache_scope,scope_queryset,selected_organization_id
 
 
 def report_key(base,request,*values):
     scope = organization_cache_scope(request.user)
-    return parameterized_key(base,scope,*values)
+    return parameterized_key(base,scope,selected_organization_id(request),*values)
 
 
 def scoped(queryset,request):
     queryset = scope_queryset(queryset,request.user)
-    organization = request.GET.get('organization')
+    organization = selected_organization_id(request)
     lookup = ORGANIZATION_LOOKUPS.get(queryset.model.__name__)
     if organization and lookup:
         queryset = queryset.filter(**{lookup:organization})
