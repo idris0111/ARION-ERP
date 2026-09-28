@@ -66,13 +66,14 @@ export function PetModel({pet,spec,animation,reducedMotion,eyeTarget,onReady}:Pr
   const previous=useRef<AnimationAction|null>(null)
   useEffect(()=>{
     const requested=spec.clips[animation]||spec.clips.idle||'Idle'
-    const name=Object.keys(actions).find(key=>key.toLowerCase()===requested.toLowerCase())
-    const next=(name&&actions[name])||actions.Idle||Object.values(actions)[0]
+    const matching=(value:string)=>Object.keys(actions).find(key=>key.toLowerCase()===value.toLowerCase()||key.toLowerCase().endsWith(`|${value.toLowerCase()}`))
+    const name=matching(requested)||matching('Idle')
+    const next=(name&&actions[name])||Object.values(actions)[0]
     if(!next||previous.current===next)return
     next.reset().setEffectiveWeight(1).fadeIn(.32)
     const repeat=animation==='idle'||animation==='sleep'||animation==='sleepy'
     next.setLoop(repeat?LoopRepeat:LoopOnce,repeat?Infinity:1)
-    next.clampWhenFinished=true
+    next.clampWhenFinished=!repeat
     next.play()
     if(previous.current)previous.current.crossFadeTo(next,.32,false)
     previous.current=next
@@ -82,6 +83,11 @@ export function PetModel({pet,spec,animation,reducedMotion,eyeTarget,onReady}:Pr
   const faceMeshes=useMemo(()=>{const meshes:Mesh[]=[];model.traverse(node=>{const mesh=node as Mesh;if(mesh.isMesh&&mesh.morphTargetDictionary&&mesh.morphTargetInfluences)meshes.push(mesh)});return meshes},[model])
   useFrame(({clock})=>{
     const t=clock.elapsedTime
+    if(root.current&&animations.length===0){
+      const lively=['happy','wave','excited','playful','petted'].includes(animation)
+      root.current.rotation.y=reducedMotion?0:Math.sin(t*(lively?1.8:.5))*(lively?.12:.045)
+      root.current.position.y=reducedMotion?0:Math.sin(t*(lively?3:1.3))*(lively?.035:.012)
+    }
     if(head!==model){
       const follow=reducedMotion?0:.055
       head.rotation.y=MathUtils.lerp(head.rotation.y,eyeTarget[0]*follow+Math.sin(t*.28)*.018,.025)
@@ -107,7 +113,7 @@ export function PetModel({pet,spec,animation,reducedMotion,eyeTarget,onReady}:Pr
   })
   const bodyScale=appearance.body_style==='compact'?.96:appearance.body_style==='tall'?1.04:1
   return <group ref={root} scale={spec.scale*bodyScale} dispose={null}>
-    <primitive object={model} dispose={null}/>
+    <group position={spec.offset||[0,0,0]}><primitive object={model} dispose={null}/></group>
     {appearance.clothes&&clothes[appearance.clothes]?.ready&&<PetAttachment root={model} item={clothes[appearance.clothes]}/>}
     {appearance.accessory&&accessories[appearance.accessory]?.ready&&<PetAttachment root={model} item={accessories[appearance.accessory]}/>}
   </group>

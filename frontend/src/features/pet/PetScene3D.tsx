@@ -81,6 +81,7 @@ export default function PetScene3D({pet,animation='idle',quality='balanced',redu
         {!mini&&renderQuality!=='performance'&&<ContactShadows position={[0,-.02,0]} opacity={dark?.35:.25} scale={3.5} blur={2.4} far={2.5} resolution={renderQuality==='high'?512:256}/>}
         {orbit&&<OrbitControls enablePan={false} enableZoom minDistance={2.5} maxDistance={6} minPolarAngle={Math.PI/2.9} maxPolarAngle={Math.PI/1.7} target={spec.target}/>}
       </Canvas>
+      {!mini&&pet.animal_type==='bear'&&<a className="pet-model-credit" href="https://poly.pizza/m/3Eb9oLfZYIc" target="_blank" rel="noopener noreferrer">3D-модель медведя: jiang liu · CC BY 3.0</a>}
       {!ready&&<div className="pet-asset-loading">Загружаем 3D-модель…</div>}
     </>}
   </div>
