@@ -54,7 +54,11 @@ export const api = {
   create: async <T extends Entity = Entity>(endpoint: string, payload: Record<string, unknown>) => (await http.post<T>(endpoint, payload)).data,
   update: async <T extends Entity = Entity>(endpoint: string, id: number, payload: Record<string, unknown>) => (await http.patch<T>(`${endpoint}${id}/`, payload)).data,
   remove: async (endpoint: string, id: number) => (await http.delete(`${endpoint}${id}/`)).data,
-  action: async (endpoint: string, id: number, action: string, payload: Record<string, unknown> = {}) => (await http.post(`${endpoint}${id}/${action}/`, payload)).data,
+  action: async (endpoint: string, id: number, action: string, payload: Record<string, unknown> = {}) => {
+    const { data } = await http.post(`${endpoint}${id}/${action}/`, payload)
+    if (action === 'post' && ['sales/', 'inventories/'].includes(endpoint)) localStorage.setItem('break_last_work_event', String(Date.now()))
+    return data
+  },
   download: async (path: string, filename: string) => { const { data } = await http.get(path, { responseType: 'blob' }); const url = URL.createObjectURL(data); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url) },
 }
 

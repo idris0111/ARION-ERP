@@ -19,7 +19,8 @@ class ErpUiRoutingTests(SimpleTestCase):
             with override_settings(BASE_DIR=Path(directory)):
                 for path in (
                     '/', '/m/products', '/m/products/new', '/m/products/12',
-                    '/m/products/12/edit', '/pos/', '/inventory/', '/reports/',
+                    '/m/products/12/edit', '/m/sale-returns', '/m/sale-returns/12',
+                    '/pos/', '/inventory/', '/reports/',
                 ):
                     with self.subTest(path=path):
                         self.assertIs(resolve(path).func, erp_ui)

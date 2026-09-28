@@ -62,5 +62,5 @@ export const navigation = [
   { label:'Сотрудники', items:[['Команда','/m/employees','ContactRound'],['Отделы','/m/departments','Network'],['Должности','/m/positions','BriefcaseBusiness'],['Зарплата','/m/salary-payments','Banknote']] },
   { label:'Аналитика', items:[['Центр отчётов','/reports','BarChart3']] },
   { label:'Организация', items:[['Компании','/m/organizations','Building2'],['Филиалы','/m/branches','MapPin'],['Пользователи и роли','/m/organization-members','ShieldCheck']] },
-  { label:'Система', items:[['Уведомления','/m/notifications','Bell'],['Журнал действий','/m/audit-logs','ScanEye'],['Настройки','/settings','Settings2']] },
+  { label:'Система', items:[['Break Room','/break-room','Leaf'],['Уведомления','/m/notifications','Bell'],['Журнал действий','/m/audit-logs','ScanEye'],['Настройки','/settings','Settings2']] },
 ] as { label: string; items: [string, string, string][] }[]

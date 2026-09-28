@@ -4,7 +4,7 @@ from django.views.decorators.cache import never_cache
 
 
 @never_cache
-def erp_ui(request, pk=None):
+def erp_ui(request, pk=None, subpath=None):
     """Serve the built React app while keeping the REST API under /api/."""
     index = settings.BASE_DIR / 'frontend' / 'dist' / 'index.html'
     if not index.is_file():

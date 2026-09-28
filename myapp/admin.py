@@ -1,4 +1,11 @@
 from django.contrib import admin
+from .models import ExchangeRate
+from .models import Pet, PetAppearance, PetInteraction, PetSettings
+
+@admin.register(ExchangeRate)
+class ExchangeRateAdmin(admin.ModelAdmin):
+    list_display = ('base_currency', 'target_currency', 'rate', 'updated_at')
+    list_filter = ('base_currency',)
 from .models import (
     Organization,
     Branch,
@@ -91,3 +98,7 @@ admin.site.register(SaleReturnItem)
 admin.site.register(PurchaseReturn)
 admin.site.register(PurchaseReturnItem)
 admin.site.register(Notification)
+admin.site.register(Pet)
+admin.site.register(PetAppearance)
+admin.site.register(PetSettings)
+admin.site.register(PetInteraction)

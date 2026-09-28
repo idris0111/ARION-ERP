@@ -1,0 +1,11 @@
+export type BreakPolicy = {organization_id:number|null;organization_enabled:boolean;organization_games_enabled:boolean;organization_pet_enabled:boolean;enabled:boolean;games_enabled:boolean;pet_enabled:boolean}
+export type BreakSettings = {enabled:boolean;show_pet_on_dashboard:boolean;reminders:'NEVER'|'RARELY'|'SOMETIMES'|'OFTEN';pet_sound:boolean;pet_animations:boolean;nature_autoplay:boolean;default_duration:2|5|10|15;focus_mode:boolean;reduced_motion:boolean;volume:number;policy:BreakPolicy}
+export type Scene = {id:string;name:string;description:string;image_key:string;image_url:string;video_url:string;audio_url:string;thumbnail_url:string}
+export type Sound = {id:string;name:string;icon:string;audio_url:string}
+export type SoundPreset = {id:number;name:string;sounds:Record<string,number>;master_volume:number;created_at:string}
+export type PetAppearance = {body_style:string;primary_color:string;secondary_color:string;eye_color:string;ears:string;tail:string;face_markings:string;body_markings:string;clothes:string;accessory:string;room:string}
+export type PetSettings = {pet_enabled:boolean;show_mini_pet:boolean;show_on_all_pages:boolean;auto_reactions:boolean;animation_enabled:boolean;sound_enabled:boolean;reduced_motion:boolean;focus_mode_hides_pet:boolean;default_mode:'mini'|'panel';preferred_position:{x?:number;y?:number};reminder_frequency:'NEVER'|'RARELY'|'SOMETIMES'|'OFTEN';quality:'high'|'balanced'|'performance'}
+export type Pet = {id:number;name:string;animal_type:string;personality:string;communication_style:string;color:string;eyes:string;ears:string;accessory:string;clothes:string;background:string;mood:string;level:number;experience:number;is_active:boolean;appearance?:PetAppearance;created_at:string;updated_at:string}
+export type PetMessage = {id:number;role:'user'|'pet';message:string;created_at:string}
+export type BreakSession = {id:number;break_type:string;started_at:string;ended_at:string|null;duration_seconds:number}
+export type BreakStats = {sessions_today:number;seconds_today:number}

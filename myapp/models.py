@@ -2,6 +2,19 @@ from django.db import models
 from django.conf import settings
 
 
+class ExchangeRate(models.Model):
+    base_currency = models.CharField(max_length=3, default='TJS')
+    target_currency = models.CharField(max_length=3)
+    rate = models.DecimalField(max_digits=20, decimal_places=10)
+    updated_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['base_currency', 'target_currency'], name='unique_exchange_rate_pair')]
+
+    def __str__(self):
+        return f'{self.base_currency}/{self.target_currency}: {self.rate}'
+
+
 class Organization(models.Model):
     name = models.CharField(max_length=255)
     full_name = models.CharField(max_length=500, blank=True)
@@ -10,6 +23,9 @@ class Organization(models.Model):
     email = models.EmailField(blank=True)
     address = models.CharField(max_length=500, blank=True)
     currency = models.CharField(max_length=10, default='TJS')
+    break_room_enabled = models.BooleanField(default=True)
+    break_room_games_enabled = models.BooleanField(default=True)
+    break_room_pet_enabled = models.BooleanField(default=True)
     logo = models.ImageField(upload_to='organizations/', null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -832,3 +848,116 @@ class CRMActivity(models.Model):
 
     def __str__(self):
         return self.subject
+
+
+class BreakRoomSettings(models.Model):
+    REMINDERS = [('NEVER', 'Never'), ('RARELY', 'Rarely'), ('SOMETIMES', 'Sometimes'), ('OFTEN', 'Often')]
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='break_room_settings')
+    enabled = models.BooleanField(default=True)
+    show_pet_on_dashboard = models.BooleanField(default=False)
+    reminders = models.CharField(max_length=12, choices=REMINDERS, default='NEVER')
+    pet_sound = models.BooleanField(default=False)
+    pet_animations = models.BooleanField(default=True)
+    nature_autoplay = models.BooleanField(default=False)
+    default_duration = models.PositiveSmallIntegerField(default=5)
+    focus_mode = models.BooleanField(default=False)
+    reduced_motion = models.BooleanField(default=False)
+    volume = models.PositiveSmallIntegerField(default=50)
+
+
+class Pet(models.Model):
+    ANIMALS = [(value, value.title()) for value in ('cat', 'dog', 'fox', 'panda', 'rabbit', 'bear', 'wolf')]
+    PERSONALITIES = [(value, value.title()) for value in ('friendly', 'funny', 'calm', 'energetic', 'motivating', 'smart', 'playful', 'sarcastic-light')]
+    STYLES = [(value, value.title()) for value in ('short', 'normal', 'talkative')]
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='break_room_pet')
+    name = models.CharField(max_length=40)
+    animal_type = models.CharField(max_length=24)
+    personality = models.CharField(max_length=20, choices=PERSONALITIES, default='friendly')
+    communication_style = models.CharField(max_length=12, choices=STYLES, default='normal')
+    color = models.CharField(max_length=24, default='sand')
+    eyes = models.CharField(max_length=24, default='warm')
+    ears = models.CharField(max_length=24, default='classic')
+    accessory = models.CharField(max_length=24, blank=True)
+    clothes = models.CharField(max_length=24, blank=True)
+    background = models.CharField(max_length=24, default='meadow')
+    mood = models.CharField(max_length=12, default='calm')
+    level = models.PositiveSmallIntegerField(default=1)
+    experience = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class PetAppearance(models.Model):
+    pet = models.OneToOneField(Pet, on_delete=models.CASCADE, related_name='appearance')
+    body_style = models.CharField(max_length=24, default='classic')
+    primary_color = models.CharField(max_length=24, default='sand')
+    secondary_color = models.CharField(max_length=24, default='cream')
+    eye_color = models.CharField(max_length=24, default='warm')
+    ears = models.CharField(max_length=24, default='classic')
+    tail = models.CharField(max_length=24, default='classic')
+    face_markings = models.CharField(max_length=24, blank=True)
+    body_markings = models.CharField(max_length=24, blank=True)
+    clothes = models.CharField(max_length=24, blank=True)
+    accessory = models.CharField(max_length=24, blank=True)
+    room = models.CharField(max_length=24, default='cozy')
+
+
+class PetSettings(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pet_settings')
+    pet_enabled = models.BooleanField(default=True)
+    show_mini_pet = models.BooleanField(default=False)
+    show_on_all_pages = models.BooleanField(default=False)
+    auto_reactions = models.BooleanField(default=True)
+    animation_enabled = models.BooleanField(default=True)
+    sound_enabled = models.BooleanField(default=False)
+    reduced_motion = models.BooleanField(default=False)
+    focus_mode_hides_pet = models.BooleanField(default=True)
+    default_mode = models.CharField(max_length=12, default='mini')
+    preferred_position = models.JSONField(default=dict)
+    reminder_frequency = models.CharField(max_length=12, default='NEVER')
+    quality = models.CharField(max_length=12, default='balanced')
+
+
+class PetInteraction(models.Model):
+    pet = models.ForeignKey(Pet, on_delete=models.CASCADE, related_name='interactions')
+    interaction_type = models.CharField(max_length=24)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PetMessage(models.Model):
+    ROLES = [('user', 'User'), ('pet', 'Pet')]
+    pet = models.ForeignKey(Pet, on_delete=models.CASCADE, related_name='messages')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='pet_messages')
+    role = models.CharField(max_length=4, choices=ROLES)
+    message = models.TextField(max_length=1000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+
+
+class SoundPreset(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sound_presets')
+    name = models.CharField(max_length=60)
+    sounds = models.JSONField(default=dict)
+    master_volume = models.PositiveSmallIntegerField(default=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class BreakSession(models.Model):
+    TYPES = [(value, value.title()) for value in ('nature', 'sound', 'game', 'pet', 'breathing')]
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='break_sessions')
+    break_type = models.CharField(max_length=12, choices=TYPES)
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['-started_at']

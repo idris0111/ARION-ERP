@@ -11,9 +11,13 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Backend-only provider; the browser receives rates through Django.
+EXCHANGE_RATE_PROVIDER_URL = os.environ.get('EXCHANGE_RATE_PROVIDER_URL', 'https://api.frankfurter.dev/v2/rates?base=TJS&quotes=USD,EUR,CNY')
 
 
 # Quick-start development settings - unsuitable for production

@@ -1,10 +1,14 @@
-from django.urls import path
+from django.urls import include, path
 from .views import *
 from .reports import *
 from .exports import *
 from .excel_exports import *
+from .exchange_rate_views import ExchangeRatesView
 
 urlpatterns = [
+    path('', include('myapp.breakroom.urls')),
+    path('exchange-rates/', ExchangeRatesView.as_view()),
+    path('exchange-rates/latest/', ExchangeRatesView.as_view()),
     path('organizations/', OrganizationListCreateView.as_view()),
     path('organizations/<int:pk>/', OrganizationDetailView.as_view()),
     path('branches/', BranchListCreateView.as_view()),

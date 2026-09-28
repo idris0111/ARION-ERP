@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pet asset QA</title><style>
+body{margin:0;background:#17212c;color:#edf1f5;font:14px system-ui}header{display:flex;gap:12px;align-items:center;padding:14px 20px;background:#223141}button{border:1px solid #4a5d70;background:#33485a;color:white;border-radius:9px;padding:9px;cursor:pointer}button.active{background:#558f9b}main{height:calc(100vh - 62px)}canvas{display:block}#info{margin-left:auto;color:#bcd3da}
+</style></head><body><header id="toolbar"><strong>Проверка GLB</strong><span id="info"></span></header><main id="stage"></main><script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const ids=['cat','dog','fox','rabbit','panda','bear','wolf'];
+const toolbar=document.querySelector('#toolbar'), info=document.querySelector('#info'), stage=document.querySelector('#stage');
+const scene=new THREE.Scene();scene.background=new THREE.Color('#243140');
+const camera=new THREE.PerspectiveCamera(38,1,.05,100);camera.position.set(2,1.6,4);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;stage.append(renderer.domElement);
+scene.add(new THREE.HemisphereLight('#e6f3ff','#526375',2));const key=new THREE.DirectionalLight('#fff0db',3);key.position.set(4,7,5);scene.add(key);const rim=new THREE.DirectionalLight('#b5d9ff',1.5);rim.position.set(-4,3,-4);scene.add(rim);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enablePan=false;
+const clock=new THREE.Clock(), loader=new GLTFLoader();let current=null,mixer=null,staticModel=false;
+function resize(){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h);camera.aspect=w/h;camera.updateProjectionMatrix()}addEventListener('resize',resize);resize();
+async function choose(id){
+  document.querySelectorAll('button').forEach(button=>button.classList.toggle('active',button.dataset.id===id));info.textContent=`Загружаем ${id}…`;
+  if(current){scene.remove(current);current=null;mixer=null}
+  try{const gltf=await loader.loadAsync(`/assets/pets/${id}/companion.glb`);current=gltf.scene;const bounds=new THREE.Box3().setFromObject(current);const center=bounds.getCenter(new THREE.Vector3());const size=bounds.getSize(new THREE.Vector3());const scale=2/size.y;current.scale.multiplyScalar(scale);current.position.set(-center.x*scale,-bounds.min.y*scale,-center.z*scale);scene.add(current);
+    const box=new THREE.Box3().setFromObject(current),dims=box.getSize(new THREE.Vector3());controls.target.set(0,dims.y*.5,0);camera.position.set(dims.x*.75,dims.y*.7,Math.max(3.4,dims.z*1.5));controls.update();
+    const idle=gltf.animations.find(clip=>/idle/i.test(clip.name))||gltf.animations[0];mixer=idle?new THREE.AnimationMixer(current):null;if(idle)mixer.clipAction(idle).play();staticModel=!idle;
+    info.textContent=`${id} · ${gltf.animations.length} клипов · ${gltf.scene.children.length} корневых узлов · высота ${size.y.toFixed(2)}`;
+  }catch(error){info.textContent=`Ошибка ${id}: ${error.message}`;console.error(error)}
+}
+for(const id of ids){const button=document.createElement('button');button.textContent=id;button.dataset.id=id;button.onclick=()=>choose(id);toolbar.insertBefore(button,info)}
+function tick(){requestAnimationFrame(tick);const delta=clock.getDelta();mixer?.update(delta);if(staticModel&&current)current.rotation.y=Math.sin(clock.elapsedTime*.45)*.07;controls.update();renderer.render(scene,camera)}tick();choose('cat');
+</script></body></html>
